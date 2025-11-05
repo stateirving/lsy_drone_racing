@@ -1,0 +1,6 @@
+[submodule "external/PythonRobotics"]
+	path = external/PythonRobotics
+	url = https://github.com/AtsushiSakai/PythonRobotics.git
+[submodule "external/rrt-algorithms"]
+	path = external/rrt-algorithms
+	url = https://github.com/motion-planning/rrt-algorithms

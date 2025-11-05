@@ -1,12 +1,23 @@
 """Sequential Dynamic Waypoint Controller fully using obs for DroneRacing-v0 with gate orientation based extension."""
 
 from __future__ import annotations
+import os
+import sys
 import numpy as np
 from typing import TYPE_CHECKING
+
 from lsy_drone_racing.control.controller import Controller
+
+# --- External dependency: PythonRobotics (RRT path planner) ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+external_path = os.path.join(current_dir, "../../external")
+sys.path.append(os.path.abspath(external_path))
+
+from PythonRobotics.PathPlanning.RRT import rrt  
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+
 
 
 class ObsBasedWaypointController(Controller):
@@ -103,6 +114,7 @@ class ObsBasedWaypointController(Controller):
         # Generate control action (position control)
         action = np.zeros(13, dtype=np.float32)
         action[0:3] = target_pos
+        
         
         return action
 
