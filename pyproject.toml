@@ -148,7 +148,6 @@ export-submission = { cmd = "kaggle competitions submit -c lsy-drone-racing-ws-2
 [tool.pixi.feature.online-submission.dependencies]
 pandas = "*"
 kaggle = "*"
-rrt-algorithms @ git+https://github.com/motion-planning/rrt-algorithms.git@develop
 
 # feature[tests]
 [tool.pixi.feature.tests.tasks]
