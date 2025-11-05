@@ -131,7 +131,7 @@ scripts = ["tools/setup_mocap.sh"]
 
 [tool.pixi.activation]
 scripts = ["tools/setup_acados.sh"]
-
+ 
 # feature[online-submission]
 # [tool.pixi.feature.online-submission]
 
