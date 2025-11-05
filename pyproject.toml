@@ -47,7 +47,7 @@ rl = ["torch == 2.8.0", "wandb"]
 
 # optional spatial dependencies (RRT + rtree)
 spatial = [
-    "rtree"
+    "rtree",
     "rrt-algorithms @ file://./external/rrt-algorithms",
 ]
 
