@@ -143,7 +143,7 @@ export-submission = { cmd = "kaggle competitions submit -c lsy-drone-racing-ws-2
 [tool.pixi.feature.online-submission.dependencies]
 pandas = "*"
 kaggle = "*"
-# 可选，如果 workflow 已安装系统依赖，可启用 RRT
+# 如果 workflow 已安装系统依赖，可启用 RRT
 # rrt-algorithms 和 rtree 在 workflow 上需要 libspatialindex-dev
 
 # feature[tests]
