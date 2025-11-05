@@ -1,6 +1,4 @@
 """Sequential Dynamic Waypoint Controller fully using obs for DroneRacing-v0 with gate orientation based extension.
-
-修正版：通过 gate idx == 2 的门后跳过 post_pt，直接去额外点 (-1.5, -1.0, 0.7)，其它逻辑不变。
 """
 
 from __future__ import annotations
