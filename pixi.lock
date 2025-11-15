@@ -1232,6 +1232,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libnghttp2-1.67.0-had1ee68_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libopenblas-0.3.30-pthreads_h94d23a6_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libsanitizer-13.4.0-h14bf0c3_7.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/libspatialindex-2.1.0-he57a185_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.50.4-h0c1763c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libssh2-1.11.1-hcf80075_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-15.2.0-h8f9b012_7.conda
@@ -1261,6 +1262,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.2-h8c095d6_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/requests-2.32.5-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/rhash-1.4.6-hb9d3cd8_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/rtree-1.4.1-pyh11ca60a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ruff-0.14.1-ha3a3aed_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/setuptools-80.9.0-pyhff2d567_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
@@ -5728,6 +5730,18 @@ packages:
   purls: []
   size: 354372
   timestamp: 1695747735668
+- conda: https://conda.anaconda.org/conda-forge/linux-64/libspatialindex-2.1.0-he57a185_0.conda
+  sha256: 03963a7786b3f53eb36ca3ec10d7a5ddd5265a81e205e28902c53a536cdfd3ad
+  md5: 2df7aaf3f8a2944885372a62c6f33b20
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - libgcc >=13
+  - libstdcxx >=13
+  license: MIT
+  license_family: MIT
+  purls: []
+  size: 399212
+  timestamp: 1734891697797
 - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.50.4-h0c1763c_0.conda
   sha256: 6d9c32fc369af5a84875725f7ddfbfc2ace795c28f246dc70055a79f9b2003da
   md5: 0b367fad34931cb79e0d6b7e5c06bb1c
@@ -6094,7 +6108,7 @@ packages:
 - pypi: ./
   name: lsy-drone-racing
   version: 0.0.1
-  sha256: b0c2ff2c13181e08cdc405e75fe9c84f124ad329166219f377a5a943b5ee73ce
+  sha256: 2055850f3aee81e6cad0e7f0297c60b5a4339053cbcf467eddbf1a792d465caa
   requires_dist:
   - fire>=0.6.0
   - numpy
@@ -14486,6 +14500,18 @@ packages:
   - pkg:pypi/rospkg?source=hash-mapping
   size: 31293
   timestamp: 1737835793379
+- conda: https://conda.anaconda.org/conda-forge/noarch/rtree-1.4.1-pyh11ca60a_0.conda
+  sha256: 461ddd1d84c180bb682560b50d538e9e264ee5cc78cab5eb2a0f21cc24815bed
+  md5: 73f0eccab422ca6a96d904a805d68fa3
+  depends:
+  - libspatialindex
+  - python >=3.9
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/rtree?source=hash-mapping
+  size: 41185
+  timestamp: 1755128422366
 - conda: https://conda.anaconda.org/conda-forge/linux-64/ruff-0.14.1-ha3a3aed_0.conda
   noarch: python
   sha256: fab29f194ae2facb591126acd35bcb22cc00283608c6214d555362623df7560f
