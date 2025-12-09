@@ -12,7 +12,7 @@ from lsy_drone_racing.control.controller import Controller
 
 # --- External dependency: PythonRobotics (RRT path planner) ---
 
-
+sys.path.append("/home/miao/repos/lsy_drone_racing")
 from rrt_algorithms.rrt.rrt import RRT
 from rrt_algorithms.search_space.search_space import SearchSpace
 

@@ -12,6 +12,7 @@ from drone_models.core import load_params
 from drone_models.so_rpy import symbolic_dynamics_euler
 from drone_models.utils.rotation import ang_vel2rpy_rates
 from lsy_drone_racing.control.controller import Controller
+from scipy.interpolate import CubicSpline
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -115,7 +116,7 @@ class CombinedRRTMPCController(Controller):
         self.length_tree_edge = 0.1
         self.smallest_edge = 0.01
         self.max_samples = 5000
-        self.prc = 0.1
+        self.prc = 0.3
         self.path = None
         self.path_points_idx = 0
         self.take_off = True
@@ -198,6 +199,22 @@ class CombinedRRTMPCController(Controller):
             return True
         return False
 
+    def smooth_path(self, path: np.ndarray) -> tuple[CubicSpline, float]:
+        """
+        给 RRT 输出的路径做三次样条平滑。
+        返回 spline 对象和路径总长度。
+        """
+        # 计算路径上每个点的弧长 s
+        dist = np.linalg.norm(np.diff(path, axis=0), axis=1)
+        s = np.concatenate(([0.0], np.cumsum(dist)))
+    
+        # 三个维度分别做 spline
+        spl_x = CubicSpline(s, path[:, 0])
+        spl_y = CubicSpline(s, path[:, 1])
+        spl_z = CubicSpline(s, path[:, 2])
+
+        return (spl_x, spl_y, spl_z), s[-1]
+    
     def plan_rrt_path(self, obs: dict, current_pos: NDArray[np.floating]):
         gate_pos = np.array(obs["gates_pos"][self.current_gate_idx])
         gate_quat = np.array(obs["gates_quat"][self.current_gate_idx])
@@ -210,6 +227,10 @@ class CombinedRRTMPCController(Controller):
             path = np.linspace(current_pos, goal_pos, 5)
         self.path = np.array(path)
         self.path_points_idx = 0
+        
+        self.splines, self.s_total = self.smooth_path(self.path)
+        self.s_now = 0.0            # 轨迹当前进度
+        self.s_step = 0.3           # 每步往前推进多少（可调）
 
     def get_next_waypoint(self, current_pos: NDArray[np.floating]) -> NDArray[np.floating]:
         if self.take_off:

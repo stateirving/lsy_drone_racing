@@ -37,7 +37,7 @@ class RRTBase(object):
 
     def add_vertex(self, tree, v):
         """
-        Add vertex to corresponding tree
+        Add vertex(顶点) to corresponding tree
         :param tree: int, tree to which to add vertex
         :param v: tuple, vertex to add
         """
@@ -80,9 +80,13 @@ class RRTBase(object):
         :param q: length of edge when steering
         :return: vertex, new steered vertex, vertex, nearest vertex in tree to new vertex
         """
-        x_rand = self.X.sample_free()
-        x_nearest = self.get_nearest(tree, x_rand)
+        # 在搜索空间随机采样一个点 x_rand
+        x_rand = self.X.sample_free()    
+        # 找树中离它最近的节点 x_nearest
+        x_nearest = self.get_nearest(tree, x_rand)  
+        # 以 x_nearest 为起点，朝 x_rand 方向前进 q 距离，得到新节点 x_new       
         x_new = self.bound_point(steer(x_nearest, x_rand, q))
+        # 检查 x_new 是否合法（不能撞障、不能重复）
         # check if new point is in X_free and not already in V
         if not self.trees[0].V.count(x_new) == 0 or not self.X.obstacle_free(x_new):
             return None, None
@@ -110,6 +114,11 @@ class RRTBase(object):
         :return: True if can be added, False otherwise
         """
         x_nearest = self.get_nearest(tree, self.x_goal)
+        
+        # 限制最大 goal-connection 距离
+        if np.linalg.norm(np.array(x_nearest) - np.array(self.x_goal)) > 0.5:
+            return False
+        
         if self.x_goal in self.trees[tree].E and x_nearest in self.trees[tree].E[self.x_goal]:
             # tree is already connected to goal using nearest vertex
             return True
@@ -124,7 +133,7 @@ class RRTBase(object):
         :return: path if possible, None otherwise
         """
         if self.can_connect_to_goal(0):
-            print("Can connect to goal")
+            # print("Can connect to goal")
             self.connect_to_goal(0)
             return self.reconstruct_path(0, self.x_init, self.x_goal)
         print("Could not connect to goal")
@@ -161,7 +170,7 @@ class RRTBase(object):
     def check_solution(self):
         # probabilistically check if solution found
         if self.prc and random.random() < self.prc:
-            print("Checking if can connect to goal at", str(self.samples_taken), "samples")
+            # print("Checking if can connect to goal at", str(self.samples_taken), "samples")
             path = self.get_path()
             if path is not None:
                 return True, path

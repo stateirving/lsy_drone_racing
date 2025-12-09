@@ -7,7 +7,7 @@ import sys
 import uuid
 import numpy as np
 from typing import TYPE_CHECKING
-
+sys.path.append("/home/miao/repos/lsy_drone_racing")
 from lsy_drone_racing.control.controller import Controller
 
 # --- External dependency: PythonRobotics (RRT path planner) ---
