@@ -40,12 +40,9 @@ class RRT2DStateController(Controller):
         self.pre_dist = 0.4
         self.post_dist = 0.4
 
-        self.gate_width = 1.0
-        self.obstacle_radius = 0.1
-
         self.length_tree_edge = 0.4
         self.smallest_edge = 0.01
-        self.max_samples = 500
+        self.max_samples = 3000
         self.prc = 0.1
 
         # path
@@ -110,11 +107,48 @@ class RRT2DStateController(Controller):
 
         #     ob = (xmin, ymin, xmax, ymax)
         #     space.obs.insert(0, ob, ob)
+        
+        gate_width = 0.5
+        half_w = gate_width / 2
+        segment_length = 0.1    # 每一小段长度（越小越精细）
+        thickness = 0.03
+        num_seg = int(gate_width / segment_length)
+        xs = np.linspace(-half_w + segment_length / 2,half_w - segment_length / 2,num_seg)
+        for i, (gpos, gquat) in enumerate(zip(obs["gates_pos"], obs["gates_quat"]) ):
+            print(obs["target_gate"],'=============target gate============')
+            print(i,'=============current obstacle generated gate index============')
+            # if i == self.current_gate_idx :
+            #     print(f'跳过目标门{i}的障碍物生成')
+            #     continue
+            
+            cx, cy, _ = gpos
+            yaw = self._quat_to_yaw(gquat)
+
+            for x_local in xs:
+                # 小矩形在门坐标系中的 4 个角
+                corners = [
+                    (x_local - segment_length/2, -thickness),
+                    (x_local - segment_length/2,  thickness),
+                    (x_local + segment_length/2, -thickness),
+                    (x_local + segment_length/2,  thickness),]
+                pts = []
+                for lx, ly in corners:
+                    x = cx + lx * np.cos(yaw) - ly * np.sin(yaw)
+                    y = cy + lx * np.sin(yaw) + ly * np.cos(yaw)
+                    pts.append([x, y])
+                pts = np.array(pts)
+
+                xmin, ymin = pts.min(axis=0)
+                xmax, ymax = pts.max(axis=0)
+
+                ob = (xmin, ymin, xmax, ymax)
+                space.obs.insert(0, ob, ob)
 
         # --- obstacles as circles → AABB ---
+        obstacle_radius = 0.15
         for pos in obs["obstacles_pos"]:
             x, y, _ = pos
-            r = self.obstacle_radius
+            r = obstacle_radius
             ob = (x - r, y - r, x + r, y + r)
             space.obs.insert(0, ob, ob)
 
@@ -231,6 +265,9 @@ class RRT2DStateController(Controller):
                         
                     if self.current_gate_idx ==2:
                         self.post_dist = 0.3
+                        
+                    if self.current_gate_idx ==3:
+                        self.max_samples = 8000
 
         return wp
 

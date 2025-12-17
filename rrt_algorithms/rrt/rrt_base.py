@@ -116,7 +116,7 @@ class RRTBase(object):
         x_nearest = self.get_nearest(tree, self.x_goal)
         
         # 限制最大 goal-connection 距离
-        if np.linalg.norm(np.array(x_nearest) - np.array(self.x_goal)) > 0.5:
+        if np.linalg.norm(np.array(x_nearest) - np.array(self.x_goal)) > 0.3:
             return False
         
         if self.x_goal in self.trees[tree].E and x_nearest in self.trees[tree].E[self.x_goal]:
