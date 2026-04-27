@@ -452,9 +452,9 @@ class MPCC(Controller):
         self.R_df = DM(np.diag([0.1, 0.5, 0.5, 0.5]))
         self.miu = 8.0
         # self.miu = 6.0
-        self.w_v_gate = 4.0
-        # self.w_v_obst = 1.0
-        self.w_v_obst = 4.0
+        self.w_v_gate = 3.0
+        self.w_v_obst = 2.0
+        # self.w_v_obst = 4.0
 
         ocp.model.cost_expr_ext_cost = self._stage_cost_expression()
 
