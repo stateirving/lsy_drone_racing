@@ -451,7 +451,7 @@ class MPCC(Controller):
         self.q_c_obst_peak = 50
         self.R_df = DM(np.diag([0.1, 0.5, 0.5, 0.5]))
         self.miu = 8.0
-        # self.miu = 6.0
+        # self.miu = 6.0 
         self.w_v_gate = 4.0
         self.w_v_obst = 1.0 
         # self.w_v_obst = 4.0
