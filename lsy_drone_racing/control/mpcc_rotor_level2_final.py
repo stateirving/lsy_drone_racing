@@ -639,7 +639,7 @@ class MPCC(Controller):
         self.R_df = DM(np.diag([0.1, 0.5, 0.5, 0.5]))
 
         # self.miu = 14.3377785384655  # 13.8
-        self.miu = 12  # 16.0
+        self.miu = 13  # 16.0
         self.w_v_gate = 2.7327203765511516
         self.w_v_obst = 2.460291111562401
 
