@@ -634,7 +634,7 @@ class MPCC(Controller):
 
         self.q_l_obst_peak = 207.83845749683678
         self.q_c_obst_peak = 110.51885732449591  # 130
-        # self.q_c_obst_peak = 130 
+        # self.q_c_obst_peak = 130  
 
         self.R_df = DM(np.diag([0.1, 0.5, 0.5, 0.5]))
 
