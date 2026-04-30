@@ -1,0 +1,101 @@
+program: ppo_racing.py
+method: grid
+project: DroneRacing-PPO
+name: seed-stability-test
+
+metric:
+  name: train/episode_reward
+  goal: maximize
+
+parameters:
+  # ==================== SWEEP PARAMETER ====================
+  seed:
+    values: [123, 456, 789, 1024, 2048, 3141, 5926, 7890, 9999]
+  
+  # ==================== FIXED PARAMETERS ====================
+  wandb_enabled:
+    value: true
+  train:
+    value: true
+  
+  # Training config
+  total_timesteps:
+    value: 25000000
+  num_envs:
+    value: 64
+  num_steps:
+    value: 128
+  batch_size:
+    value: 8192
+  minibatch_size:
+    value: 2048
+  num_minibatches:
+    value: 4
+  update_epochs:
+    value: 10
+  
+  # PPO hyperparameters
+  learning_rate:
+    value: 0.0003
+  anneal_lr:
+    value: true
+  gamma:
+    value: 0.99
+  gae_lambda:
+    value: 0.95
+  clip_coef:
+    value: 0.2
+  clip_vloss:
+    value: true
+  ent_coef:
+    value: 0.01
+  vf_coef:
+    value: 0.5
+  max_grad_norm:
+    value: 0.5
+  norm_adv:
+    value: true
+  target_kl:
+    value: null
+  
+  # Reward coefficients
+  coef_progress:
+    value: 20.0
+  coef_gate:
+    value: 10.0
+  coef_finish:
+    value: 50.0
+  coef_time:
+    value: 0.05
+  coef_align:
+    value: 0.5
+  coef_collision:
+    value: 10.0
+  coef_smooth:
+    value: 0.1
+  coef_spin:
+    value: 0.1
+  
+  # Environment
+  config_file:
+    value: level0_no_obst.toml
+  n_history:
+    value: 2
+  
+  # Network
+  hidden_dim:
+    value: 256
+  
+  # Device settings
+  cuda:
+    value: true
+  jax_device:
+    value: gpu
+  torch_deterministic:
+    value: true
+  
+  # WandB
+  wandb_project_name:
+    value: DroneRacing-PPO
+  wandb_entity:
+    value: null

@@ -1,0 +1,134 @@
+program: ppo_racing.py
+method: bayes
+project: DroneRacing-PPO
+name: 4070-sweep-lv0-no-obstacles
+
+metric:
+  name: train/episode_reward
+  goal: maximize
+
+# 早停机制（建议开启，节省时间）
+# early_terminate:
+#   type: hyperband
+#   min_iter: 60
+#   eta: 2.5
+#   s: 2
+
+run_cap: 80
+
+parameters:
+  # ===== 种子（固定） =====
+  seed:
+    value: 123
+  
+  # ===== 训练规模 =====
+  num_envs:
+    values: [512, 768, 896, 1024]
+  
+  num_steps:
+    values: [64, 96, 128]
+  
+  num_minibatches:
+    values: [4, 8]
+  
+  update_epochs:
+    values: [8, 9, 10, 11, 12]
+  
+  total_timesteps:
+    value: 200000000
+  
+  # ===== PPO超参数 =====
+  # 连续参数：简化语法（去掉distribution）
+  learning_rate:
+    min: 0.0001
+    max: 0.0006
+  
+  ent_coef:
+    min: 0.002
+    max: 0.02
+  
+  # 离散参数
+  gamma:
+    values: [0.98, 0.99, 0.995]
+  
+  gae_lambda:
+    values: [0.90, 0.93, 0.95]
+  
+  clip_coef:
+    values: [0.15, 0.2, 0.25]
+  
+  vf_coef:
+    values: [0.4, 0.5, 0.6]
+  
+  max_grad_norm:
+    values: [0.4, 0.5, 0.7]
+  
+  # 固定的布尔/null值
+  anneal_lr:
+    value: true
+  
+  clip_vloss:
+    value: true
+  
+  norm_adv:
+    value: true
+  
+  target_kl:
+    value: null
+  
+  # ===== 奖励系数 =====
+  coef_progress:
+    value: 20.0
+  
+  coef_gate:
+    value: 10.0
+  
+  coef_finish:
+    value: 100.0
+  
+  coef_time:
+    value: 0.05
+  
+  coef_align:
+    value: 0.5
+  
+  coef_collision:
+    value: 10.0
+  
+  coef_smooth:
+    value: 0.1
+  
+  coef_spin:
+    value: 0.1
+  
+  # ===== 环境和设备 =====
+  config_file:
+    value: level0_no_obst.toml
+  
+  n_history:
+    value: 2
+  
+  hidden_dim:
+    value: 256
+  
+  cuda:
+    value: true
+  
+  jax_device:
+    value: gpu
+  
+  torch_deterministic:
+    value: true
+  
+  # ===== WandB =====
+  wandb_enabled:
+    value: true
+  
+  wandb_project_name:
+    value: DroneRacing-PPO
+  
+  wandb_entity:
+    value: null
+  
+  train:
+    value: true

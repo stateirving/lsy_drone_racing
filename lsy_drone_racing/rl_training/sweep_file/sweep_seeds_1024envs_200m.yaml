@@ -1,0 +1,110 @@
+program: ppo_racing.py
+method: grid
+project: DroneRacing-PPO
+name: seed-sweep-1024envs-200M
+
+metric:
+  name: train/episode_reward
+  goal: maximize
+
+# Optional: Early termination to save compute on clearly bad seeds
+early_terminate:
+  type: hyperband
+  min_iter: 50        # Wait at least 50 iterations before terminating
+  eta: 3              # Aggressive termination factor
+  s: 2
+
+parameters:
+  # ==================== SWEEP PARAMETER ====================
+  seed:
+    values: [3141, 123, 2048, 456, 789, 1024, 5926, 7890, 9999, 12345, 67890]
+  
+  # ==================== FIXED PARAMETERS ====================
+  wandb_enabled:
+    value: true
+  train:
+    value: true
+  
+  # Training scale - MASSIVE BATCH
+  total_timesteps:
+    value: 200000000
+  num_envs:
+    value: 1024
+  num_steps:
+    value: 256
+  batch_size:
+    value: 262144
+  minibatch_size:
+    value: 65536
+  num_minibatches:
+    value: 4
+  num_iterations:
+    value: 763
+  update_epochs:
+    value: 10
+  
+  # PPO hyperparameters
+  learning_rate:
+    value: 0.0003
+  anneal_lr:
+    value: true
+  gamma:
+    value: 0.99
+  gae_lambda:
+    value: 0.95
+  clip_coef:
+    value: 0.2
+  clip_vloss:
+    value: true
+  ent_coef:
+    value: 0.01
+  vf_coef:
+    value: 0.5
+  max_grad_norm:
+    value: 0.5
+  norm_adv:
+    value: true
+  target_kl:
+    value: null
+  
+  # Reward coefficients
+  coef_progress:
+    value: 20.0
+  coef_gate:
+    value: 10.0
+  coef_finish:
+    value: 100.0
+  coef_time:
+    value: 0.05
+  coef_align:
+    value: 0.5
+  coef_collision:
+    value: 10.0
+  coef_smooth:
+    value: 0.1
+  coef_spin:
+    value: 0.1
+  
+  # Environment
+  config_file:
+    value: level0_no_obst.toml
+  n_history:
+    value: 2
+  
+  # Network
+  hidden_dim:
+    value: 256
+  
+  # Device settings
+  cuda:
+    value: true
+  jax_device:
+    value: gpu
+  torch_deterministic:
+    value: true
+  
+  # WandB
+  wandb_project_name:
+    value: DroneRacing-PPO
+  wandb_entity:
+    value: null

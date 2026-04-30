@@ -1,0 +1,108 @@
+# sweep_config_full.yaml
+program: ppo_racing.py
+method: bayes
+metric:
+  name: charts/episodic_return
+  goal: maximize
+
+parameters:
+  # ========== 🔥 新增：训练规模参数 ==========
+  
+  # 并行环境数（影响样本多样性）
+  num_envs:
+    values: [512, 768, 1024, 1536]
+  
+  # Rollout步数（影响value估计和update频率）
+  num_steps:
+    values: [64, 96, 128]
+  
+  # Minibatch数（需要与batch size协调）
+  num_minibatches:
+    values: [4, 8, 16]
+  
+  # ========== 核心超参数 ==========
+  
+  # Entropy coefficient（解决确定性问题）
+  ent_coef:
+    distribution: uniform
+    min: 0.015
+    max: 0.06
+  
+  # 学习率
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.0005
+  
+  # Clip coefficient
+  clip_coef:
+    distribution: uniform
+    min: 0.2
+    max: 0.35
+  
+  # Update epochs（需要根据batch size调整）
+  update_epochs:
+    values: [8, 10, 12, 15]
+  
+  # ========== 固定参数 ==========
+  total_timesteps:
+    value: 150000000
+  
+  gamma:
+    value: 0.98
+  gae_lambda:
+    value: 0.95
+  norm_adv:
+    value: True
+  clip_vloss:
+    value: True
+  vf_coef:
+    value: 0.6
+  max_grad_norm:
+    value: 0.4
+  anneal_lr:
+    value: True
+  
+  hidden_dim:
+    value: 256
+  n_history:
+    value: 2
+  
+  coef_progress:
+    value: 15
+  coef_gate:
+    value: 20
+  coef_finish:
+    value: 100
+  coef_collision:
+    value: 25
+  coef_smooth:
+    value: 0.2
+  coef_spin:
+    value: 0.15
+  coef_align:
+    value: 0.5
+  coef_time:
+    value: 0.05
+  
+  config_file:
+    value: level2_no_obst.toml
+  seed:
+    distribution: int_uniform
+    min: 100
+    max: 200
+  jax_device:
+    value: gpu
+  cuda:
+    value: True
+  torch_deterministic:
+    value: True
+  wandb_enabled:
+    value: True
+  wandb_project_name:
+    value: DroneRacing-FullSweep
+
+early_terminate:
+  type: hyperband
+  min_iter: 25
+  eta: 3
