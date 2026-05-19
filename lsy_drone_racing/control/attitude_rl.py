@@ -120,12 +120,24 @@ class AttitudeRL(Controller):
         """Extract the relevant parts of the observation for the RL policy."""
         obs_rl = {}
         obs_rl["basic_obs"] = np.concatenate([obs[k] for k in self.basic_obs_key], axis=-1)
+        # freq             每秒多少控制步
+        # 1 / freq         每一步对应多少秒
+        # _tick            当前第几步
+        # _tick / freq     当前时间，单位秒
+        # trajectory_time  整条轨迹总时长，15 秒
+        # trajectory.shape[0] 轨迹总步数
+        # samples_dt       未来轨迹采样间隔，0.1 秒
+        # n_samples        采样未来轨迹点数量，10 个
+        # sample_offsets   未来采样点相对当前步的步数偏移
+        # idx              当前实际取的轨迹索引
         idx = np.clip(self._tick + self.sample_offsets, 0, self.trajectory.shape[0] - 1)
         dpos = self.trajectory[idx] - obs["pos"]  # (n_samples, 3)
         obs_rl["local_samples"] = dpos.reshape(-1)  # (n_samples*3,)
         obs_rl["prev_obs"] = self.prev_obs.reshape(-1)  # (n_obs*13,)
         obs_rl["last_action"] = self.last_action  # (4,)
         self.prev_obs = np.concatenate([self.prev_obs[1:, :], obs_rl["basic_obs"][None, :]], axis=0)
+        # Agent((13 + 3 * self.n_samples + self.n_obs * 13 + 4,), (4,))
+        # 13 + 30 + 26 + 4 = 73 把无人机当前状态、未来轨迹点、历史状态、上一次动作拼成一个 73 维向量，作为 RL policy 的输入。
 
         return np.concatenate([v for v in obs_rl.values()], axis=-1).astype(np.float32)
 

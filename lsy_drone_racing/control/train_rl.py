@@ -199,6 +199,7 @@ class RandTrajEnv(DroneEnv):
 
         # Update observation space
         spec = {k: v for k, v in self.single_observation_space.items()}
+        # Add relative position to next trajectory points
         spec["local_samples"] = spaces.Box(-np.inf, np.inf, shape=(3 * self.n_samples,))
         self.single_observation_space = spaces.Dict(spec)
         self.observation_space = batch_space(self.single_observation_space, self.sim.n_worlds)
@@ -426,9 +427,12 @@ class ActionPenalty(VectorObservationWrapper):
         # penalty on actions
         action_diff = action - self._last_action
         # energy
+        # 惩罚trust
         reward -= self.act_coef * action[..., -1] ** 2
         # smoothness
+        # 惩罚trust变化率
         reward -= self.d_act_th_coef * action_diff[..., -1] ** 2
+        # 惩罚roll、pitch变化率
         reward -= self.d_act_xy_coef * jp.sum(action_diff[..., :3] ** 2, axis=-1)
         self._last_action = action
         return self.observations(obs), reward, terminated, truncated, info
