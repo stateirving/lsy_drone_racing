@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "ppo_level2_notebook_gatepass.ckpt"
+MODEL_NAME = "ppo_level2_notebook_gatepass1.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(

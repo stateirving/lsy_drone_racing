@@ -95,10 +95,18 @@ class Args:
     d_act_xy_coef: float = 0.05
     act_coef: float = 0.005
     progress_coef: float = 10.0
-    gate_axis_coef: float = 20.0
+    gate_axis_coef: float = 8.0
+    gate_stage_coef: float = 5.0
+    gate_front_bonus: float = 4.0
+    gate_plane_bonus: float = 8.0
+    gate_back_bonus: float = 4.0
+    gate_stage_offset: float = 0.35
+    gate_stage_radius: float = 0.24
+    wrong_side_penalty: float = 6.0
     near_gate_coef: float = 0.0
     gate_bonus: float = 30.0
     finish_bonus: float = 80.0
+    missed_gate_penalty: float = 8.0
     crash_penalty: float = 50.0
     obstacle_coef: float = 1.5
     obstacle_margin: float = 0.35
@@ -165,7 +173,15 @@ class Level2RaceReward(VectorRewardWrapper):
         act_coef: float = 0.005,
         d_act_th_coef: float = 0.02,
         d_act_xy_coef: float = 0.05,
-        gate_axis_coef: float = 20.0,
+        gate_axis_coef: float = 8.0,
+        gate_stage_coef: float = 5.0,
+        gate_front_bonus: float = 4.0,
+        gate_plane_bonus: float = 8.0,
+        gate_back_bonus: float = 4.0,
+        gate_stage_offset: float = 0.35,
+        gate_stage_radius: float = 0.24,
+        wrong_side_penalty: float = 6.0,
+        missed_gate_penalty: float = 8.0,
         obstacle_coef: float = 1.5,
         obstacle_margin: float = 0.35,
         time_penalty: float = 0.05,
@@ -183,6 +199,14 @@ class Level2RaceReward(VectorRewardWrapper):
         self.d_act_th_coef = d_act_th_coef
         self.d_act_xy_coef = d_act_xy_coef
         self.gate_axis_coef = gate_axis_coef
+        self.gate_stage_coef = gate_stage_coef
+        self.gate_front_bonus = gate_front_bonus
+        self.gate_plane_bonus = gate_plane_bonus
+        self.gate_back_bonus = gate_back_bonus
+        self.gate_stage_offset = gate_stage_offset
+        self.gate_stage_radius = gate_stage_radius
+        self.wrong_side_penalty = wrong_side_penalty
+        self.missed_gate_penalty = missed_gate_penalty
         self.obstacle_coef = obstacle_coef
         self.obstacle_margin = obstacle_margin
         self.time_penalty = time_penalty
@@ -191,26 +215,54 @@ class Level2RaceReward(VectorRewardWrapper):
         self._last_action = jp.zeros((self.num_envs, 4), dtype=jp.float32)
         self._prev_gate_dist = jp.zeros((self.num_envs,), dtype=jp.float32)
         self._prev_gate_x = jp.zeros((self.num_envs,), dtype=jp.float32)
+        self._prev_gate_local = jp.zeros((self.num_envs, 3), dtype=jp.float32)
         self._prev_target_gate = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._gate_stage = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._prev_stage_dist = jp.zeros((self.num_envs,), dtype=jp.float32)
+        self._back_gate_active = jp.zeros((self.num_envs,), dtype=bool)
+        self._back_gate_idx = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._prev_back_gate_local = jp.zeros((self.num_envs, 3), dtype=jp.float32)
 
     def reset(self, seed: int | None = None, options: dict | None = None) -> tuple[dict, dict]:
         """Reset wrapper state from raw race observations."""
         observations, infos = self.env.reset(seed=seed, options=options)
         self._last_action = jp.zeros((self.num_envs, 4), dtype=jp.float32)
         self._prev_gate_dist = self._gate_distance(observations)
-        self._prev_gate_x = self._gate_frame_pos(observations)[:, 0]
+        self._prev_gate_local = self._gate_frame_pos(observations)
+        self._prev_gate_x = self._prev_gate_local[:, 0]
         self._prev_target_gate = observations["target_gate"]
+        self._gate_stage = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._prev_stage_dist = self._gate_stage_distance(
+            observations, self._gate_stage, observations["target_gate"]
+        )
+        self._back_gate_active = jp.zeros((self.num_envs,), dtype=bool)
+        self._back_gate_idx = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._prev_back_gate_local = jp.zeros((self.num_envs, 3), dtype=jp.float32)
         return observations, infos
 
     def step(self, actions: Array) -> tuple[dict, Array, Array, Array, dict]:
         """Apply action and replace sparse environment reward with shaped reward."""
         observations, _rewards, terminations, truncations, infos = self.env.step(actions)
-        reward, components, metrics = self._reward_components(
-            observations, actions, terminations, truncations
-        )
+        (
+            reward,
+            components,
+            metrics,
+            new_gate_stage,
+            new_back_gate_active,
+            new_back_gate_idx,
+            new_prev_back_gate_local,
+        ) = self._reward_components(observations, actions, terminations, truncations)
         self._prev_gate_dist = self._gate_distance(observations)
-        self._prev_gate_x = self._gate_frame_pos(observations)[:, 0]
+        self._prev_gate_local = self._gate_frame_pos(observations)
+        self._prev_gate_x = self._prev_gate_local[:, 0]
         self._prev_target_gate = observations["target_gate"]
+        self._gate_stage = new_gate_stage
+        self._prev_stage_dist = self._gate_stage_distance(
+            observations, self._gate_stage, observations["target_gate"]
+        )
+        self._back_gate_active = new_back_gate_active
+        self._back_gate_idx = new_back_gate_idx
+        self._prev_back_gate_local = new_prev_back_gate_local
         self._last_action = jp.asarray(actions)
 
         infos = dict(infos)
@@ -225,11 +277,12 @@ class Level2RaceReward(VectorRewardWrapper):
         actions: Array,
         terminations: Array,
         truncations: Array,
-    ) -> tuple[Array, dict[str, Array], dict[str, Array]]:
+    ) -> tuple[Array, dict[str, Array], dict[str, Array], Array, Array, Array, Array]:
         gate_dist = self._gate_distance(observations)
         target_gate = observations["target_gate"]
         finished = target_gate < 0
         passed_gate = (target_gate != self._prev_target_gate) & (self._prev_target_gate >= 0)
+        target_changed = target_gate != self._prev_target_gate
         crashed = terminations & ~finished
 
         raw_progress = self._prev_gate_dist - gate_dist
@@ -241,11 +294,87 @@ class Level2RaceReward(VectorRewardWrapper):
         centerline_weight = jp.exp(-10.0 * centerline_dist**2)
         same_gate = (target_gate == self._prev_target_gate) & (self._prev_target_gate >= 0)
         raw_axis_progress = jp.clip(gate_x - self._prev_gate_x, -0.1, 0.1)
+        crossed_gate_plane = same_gate & (self._prev_gate_x < 0.0) & (gate_x > 0.0) & ~finished
+        gate_dx = jp.maximum(gate_x - self._prev_gate_x, 1e-6)
+        plane_alpha = jp.clip(-self._prev_gate_x / gate_dx, 0.0, 1.0)
+        plane_yz = self._prev_gate_local[:, 1:3] + plane_alpha[:, None] * (
+            gate_local[:, 1:3] - self._prev_gate_local[:, 1:3]
+        )
+        gate_plane_dist = jp.linalg.norm(plane_yz, axis=-1)
+        missed_gate = crossed_gate_plane & (gate_plane_dist > 0.25)
+        prev_gate_local = self._gate_frame_pos_for_gate(observations, self._prev_target_gate)
+        back_dx = jp.maximum(prev_gate_local[:, 0] - self._prev_gate_x, 1e-6)
+        back_alpha = jp.clip((self.gate_stage_offset - self._prev_gate_x) / back_dx, 0.0, 1.0)
+        back_yz = self._prev_gate_local[:, 1:3] + back_alpha[:, None] * (
+            prev_gate_local[:, 1:3] - self._prev_gate_local[:, 1:3]
+        )
+        back_plane_dist = jp.linalg.norm(back_yz, axis=-1)
+        tracked_gate_local = self._gate_frame_pos_for_gate(observations, self._back_gate_idx)
+        tracked_back_dx = jp.maximum(
+            tracked_gate_local[:, 0] - self._prev_back_gate_local[:, 0], 1e-6
+        )
+        tracked_back_alpha = jp.clip(
+            (self.gate_stage_offset - self._prev_back_gate_local[:, 0]) / tracked_back_dx,
+            0.0,
+            1.0,
+        )
+        tracked_back_yz = self._prev_back_gate_local[:, 1:3] + tracked_back_alpha[:, None] * (
+            tracked_gate_local[:, 1:3] - self._prev_back_gate_local[:, 1:3]
+        )
+        tracked_back_plane_dist = jp.linalg.norm(tracked_back_yz, axis=-1)
         gate_axis_progress = jp.where(
             same_gate & ~finished,
             raw_axis_progress * centerline_weight,
             0.0,
         )
+        stage_dist = self._gate_stage_distance(observations, self._gate_stage, target_gate)
+        gate_stage_progress = jp.where(
+            same_gate & ~finished,
+            jp.clip(self._prev_stage_dist - stage_dist, -0.2, 0.2),
+            0.0,
+        )
+        front_hit = (
+            same_gate
+            & (self._gate_stage == 0)
+            & (self._prev_gate_x < -self.gate_stage_offset)
+            & (gate_x >= -self.gate_stage_offset)
+            & (centerline_dist < self.gate_stage_radius)
+        )
+        gate_pass_hit = passed_gate & (self._gate_stage == 1)
+        back_hit_on_pass = (
+            gate_pass_hit
+            & (self._prev_gate_x < self.gate_stage_offset)
+            & (prev_gate_local[:, 0] >= self.gate_stage_offset)
+            & (back_plane_dist < self.gate_stage_radius)
+        )
+        back_hit_tracked = (
+            self._back_gate_active
+            & (self._prev_back_gate_local[:, 0] < self.gate_stage_offset)
+            & (tracked_gate_local[:, 0] >= self.gate_stage_offset)
+            & (tracked_back_plane_dist < self.gate_stage_radius)
+        )
+        back_hit = back_hit_on_pass | back_hit_tracked
+        start_back_tracking = gate_pass_hit & ~back_hit_on_pass & ~finished
+        keep_back_tracking = self._back_gate_active & ~back_hit_tracked & ~finished
+        new_back_gate_active = start_back_tracking | keep_back_tracking
+        new_back_gate_idx = jp.where(
+            start_back_tracking, self._prev_target_gate, self._back_gate_idx
+        )
+        new_back_gate_local = self._gate_frame_pos_for_gate(observations, new_back_gate_idx)
+        new_prev_back_gate_local = jp.where(
+            new_back_gate_active[:, None],
+            new_back_gate_local,
+            jp.zeros_like(new_back_gate_local),
+        )
+        wrong_side_gate = (
+            same_gate
+            & (gate_x > self.gate_stage_offset)
+            & (centerline_dist > self.gate_stage_radius)
+            & ~passed_gate
+        )
+        stage_after_front = jp.where(front_hit, 1, self._gate_stage)
+        stage_after_pass = jp.where(gate_pass_hit, 2, stage_after_front)
+        new_gate_stage = jp.where(target_changed | finished, 0, stage_after_pass)
 
         action_diff = actions - self._last_action
         act_penalty = jp.sum(actions[..., :3] ** 2, axis=-1) + actions[..., -1] ** 2
@@ -259,9 +388,15 @@ class Level2RaceReward(VectorRewardWrapper):
         components = {
             "progress": self.progress_coef * progress,
             "gate_axis_progress": self.gate_axis_coef * gate_axis_progress,
+            "gate_stage_progress": self.gate_stage_coef * gate_stage_progress,
+            "gate_front": self.gate_front_bonus * front_hit.astype(jp.float32),
+            "gate_plane": self.gate_plane_bonus * passed_gate.astype(jp.float32),
+            "gate_back": self.gate_back_bonus * back_hit.astype(jp.float32),
             "near_gate": self.near_gate_coef * near_gate,
             "gate_bonus": self.gate_bonus * passed_gate.astype(jp.float32),
             "finish_bonus": self.finish_bonus * finished.astype(jp.float32),
+            "missed_gate": -self.missed_gate_penalty * missed_gate.astype(jp.float32),
+            "wrong_side": -self.wrong_side_penalty * wrong_side_gate.astype(jp.float32),
             "crash": -self.crash_penalty * crashed.astype(jp.float32),
             "action": -self.act_coef * act_penalty,
             "smooth": -smooth_penalty,
@@ -279,8 +414,24 @@ class Level2RaceReward(VectorRewardWrapper):
             "target_gate": jp.maximum(target_gate, 0).astype(jp.float32),
             "gate_axis_x": gate_x,
             "gate_centerline_dist": centerline_dist,
+            "gate_plane_dist": gate_plane_dist,
+            "gate_plane_cross_rate": crossed_gate_plane.astype(jp.float32),
+            "missed_gate_rate": missed_gate.astype(jp.float32),
+            "gate_stage": self._gate_stage.astype(jp.float32),
+            "gate_front_hit_rate": front_hit.astype(jp.float32),
+            "gate_pass_hit_rate": gate_pass_hit.astype(jp.float32),
+            "gate_back_hit_rate": back_hit.astype(jp.float32),
+            "wrong_side_gate_rate": wrong_side_gate.astype(jp.float32),
         }
-        return reward, components, metrics
+        return (
+            reward,
+            components,
+            metrics,
+            new_gate_stage,
+            new_back_gate_active,
+            new_back_gate_idx,
+            new_prev_back_gate_local,
+        )
 
     def _gate_distance(self, observations: dict[str, Array]) -> Array:
         target_gate = observations["target_gate"]
@@ -292,16 +443,31 @@ class Level2RaceReward(VectorRewardWrapper):
         return jp.linalg.norm(target_pos - observations["pos"], axis=-1)
 
     def _gate_frame_pos(self, observations: dict[str, Array]) -> Array:
-        target_gate = observations["target_gate"]
+        return self._gate_frame_pos_for_gate(observations, observations["target_gate"])
+
+    def _gate_frame_pos_for_gate(self, observations: dict[str, Array], gate_idx: Array) -> Array:
         gates_pos = observations["gates_pos"]
         n_gates = gates_pos.shape[1]
-        gate_idx = jp.mod(target_gate, n_gates)
+        gate_idx = jp.mod(gate_idx, n_gates)
         batch_idx = jp.arange(gates_pos.shape[0])
         gate_pos = gates_pos[batch_idx, gate_idx]
         gate_quat = observations["gates_quat"][batch_idx, gate_idx]
         gate_rot = RaceObservation.quat_to_rotmat(gate_quat)
         gate_rot_t = jp.swapaxes(gate_rot, -1, -2)
         return jp.einsum("nij,nj->ni", gate_rot_t, observations["pos"] - gate_pos)
+
+    def _gate_stage_distance(
+        self, observations: dict[str, Array], stage: Array, target_gate: Array
+    ) -> Array:
+        gate_local = self._gate_frame_pos_for_gate(observations, target_gate)
+        zero = jp.zeros_like(gate_local[:, 0])
+        stage_x = jp.where(
+            stage == 0,
+            -self.gate_stage_offset,
+            jp.where(stage == 1, 0.0, self.gate_stage_offset),
+        )
+        stage_target = jp.stack([stage_x, zero, zero], axis=-1)
+        return jp.linalg.norm(gate_local - stage_target, axis=-1)
 
     @staticmethod
     def _tilt(quat: Array) -> Array:
@@ -528,9 +694,15 @@ def set_seeds(seed: int):
 REWARD_COMPONENT_KEYS = (
     "progress",
     "gate_axis_progress",
+    "gate_stage_progress",
+    "gate_front",
+    "gate_plane",
+    "gate_back",
     "near_gate",
     "gate_bonus",
     "finish_bonus",
+    "missed_gate",
+    "wrong_side",
     "crash",
     "action",
     "smooth",
@@ -548,6 +720,14 @@ RACE_METRIC_KEYS = (
     "target_gate",
     "gate_axis_x",
     "gate_centerline_dist",
+    "gate_plane_dist",
+    "gate_plane_cross_rate",
+    "missed_gate_rate",
+    "gate_stage",
+    "gate_front_hit_rate",
+    "gate_pass_hit_rate",
+    "gate_back_hit_rate",
+    "wrong_side_gate_rate",
 )
 
 
@@ -618,7 +798,15 @@ def make_envs(
         act_coef=coefs.get("act_coef", 0.005),
         d_act_th_coef=coefs.get("d_act_th_coef", 0.02),
         d_act_xy_coef=coefs.get("d_act_xy_coef", 0.05),
-        gate_axis_coef=coefs.get("gate_axis_coef", 20.0),
+        gate_axis_coef=coefs.get("gate_axis_coef", 8.0),
+        gate_stage_coef=coefs.get("gate_stage_coef", 5.0),
+        gate_front_bonus=coefs.get("gate_front_bonus", 4.0),
+        gate_plane_bonus=coefs.get("gate_plane_bonus", 8.0),
+        gate_back_bonus=coefs.get("gate_back_bonus", 4.0),
+        gate_stage_offset=coefs.get("gate_stage_offset", 0.35),
+        gate_stage_radius=coefs.get("gate_stage_radius", 0.24),
+        wrong_side_penalty=coefs.get("wrong_side_penalty", 6.0),
+        missed_gate_penalty=coefs.get("missed_gate_penalty", 8.0),
         obstacle_coef=coefs.get("obstacle_coef", 1.5),
         obstacle_margin=coefs.get("obstacle_margin", 0.35),
         time_penalty=coefs.get("time_penalty", 0.05),
@@ -706,9 +894,17 @@ def train_ppo(
         "act_coef": args.act_coef,
         "progress_coef": args.progress_coef,
         "gate_axis_coef": args.gate_axis_coef,
+        "gate_stage_coef": args.gate_stage_coef,
+        "gate_front_bonus": args.gate_front_bonus,
+        "gate_plane_bonus": args.gate_plane_bonus,
+        "gate_back_bonus": args.gate_back_bonus,
+        "gate_stage_offset": args.gate_stage_offset,
+        "gate_stage_radius": args.gate_stage_radius,
+        "wrong_side_penalty": args.wrong_side_penalty,
         "near_gate_coef": args.near_gate_coef,
         "gate_bonus": args.gate_bonus,
         "finish_bonus": args.finish_bonus,
+        "missed_gate_penalty": args.missed_gate_penalty,
         "crash_penalty": args.crash_penalty,
         "obstacle_coef": args.obstacle_coef,
         "obstacle_margin": args.obstacle_margin,
@@ -947,9 +1143,17 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
         "act_coef": args.act_coef,
         "progress_coef": args.progress_coef,
         "gate_axis_coef": args.gate_axis_coef,
+        "gate_stage_coef": args.gate_stage_coef,
+        "gate_front_bonus": args.gate_front_bonus,
+        "gate_plane_bonus": args.gate_plane_bonus,
+        "gate_back_bonus": args.gate_back_bonus,
+        "gate_stage_offset": args.gate_stage_offset,
+        "gate_stage_radius": args.gate_stage_radius,
+        "wrong_side_penalty": args.wrong_side_penalty,
         "near_gate_coef": args.near_gate_coef,
         "gate_bonus": args.gate_bonus,
         "finish_bonus": args.finish_bonus,
+        "missed_gate_penalty": args.missed_gate_penalty,
         "crash_penalty": args.crash_penalty,
         "obstacle_coef": args.obstacle_coef,
         "obstacle_margin": args.obstacle_margin,
@@ -999,9 +1203,17 @@ def debug_rollout(args: Args, n_steps: int, device: torch.device, jax_device: st
         "act_coef": args.act_coef,
         "progress_coef": args.progress_coef,
         "gate_axis_coef": args.gate_axis_coef,
+        "gate_stage_coef": args.gate_stage_coef,
+        "gate_front_bonus": args.gate_front_bonus,
+        "gate_plane_bonus": args.gate_plane_bonus,
+        "gate_back_bonus": args.gate_back_bonus,
+        "gate_stage_offset": args.gate_stage_offset,
+        "gate_stage_radius": args.gate_stage_radius,
+        "wrong_side_penalty": args.wrong_side_penalty,
         "near_gate_coef": args.near_gate_coef,
         "gate_bonus": args.gate_bonus,
         "finish_bonus": args.finish_bonus,
+        "missed_gate_penalty": args.missed_gate_penalty,
         "crash_penalty": args.crash_penalty,
         "obstacle_coef": args.obstacle_coef,
         "obstacle_margin": args.obstacle_margin,
@@ -1057,10 +1269,18 @@ def main(
     model_name: str = "ppo_level2_racing.ckpt",
     n_obs: int = 2,
     progress_coef: float = 10.0,
-    gate_axis_coef: float = 20.0,
+    gate_axis_coef: float = 8.0,
+    gate_stage_coef: float = 5.0,
+    gate_front_bonus: float = 4.0,
+    gate_plane_bonus: float = 8.0,
+    gate_back_bonus: float = 4.0,
+    gate_stage_offset: float = 0.35,
+    gate_stage_radius: float = 0.24,
+    wrong_side_penalty: float = 6.0,
     near_gate_coef: float = 0.0,
     gate_bonus: float = 30.0,
     finish_bonus: float = 80.0,
+    missed_gate_penalty: float = 8.0,
     crash_penalty: float = 50.0,
     obstacle_coef: float = 1.5,
     obstacle_margin: float = 0.35,
@@ -1090,9 +1310,17 @@ def main(
         n_obs=n_obs,
         progress_coef=progress_coef,
         gate_axis_coef=gate_axis_coef,
+        gate_stage_coef=gate_stage_coef,
+        gate_front_bonus=gate_front_bonus,
+        gate_plane_bonus=gate_plane_bonus,
+        gate_back_bonus=gate_back_bonus,
+        gate_stage_offset=gate_stage_offset,
+        gate_stage_radius=gate_stage_radius,
+        wrong_side_penalty=wrong_side_penalty,
         near_gate_coef=near_gate_coef,
         gate_bonus=gate_bonus,
         finish_bonus=finish_bonus,
+        missed_gate_penalty=missed_gate_penalty,
         crash_penalty=crash_penalty,
         obstacle_coef=obstacle_coef,
         obstacle_margin=obstacle_margin,
