@@ -14,7 +14,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import wandb
 from gymnasium import spaces
 from gymnasium.vector import VectorEnv, VectorObservationWrapper, VectorRewardWrapper, VectorWrapper
 from gymnasium.vector.utils import batch_space
@@ -23,6 +22,7 @@ from jax import Array
 from torch import Tensor
 from torch.distributions.normal import Normal
 
+import wandb
 from lsy_drone_racing.utils import load_config
 
 
@@ -47,23 +47,23 @@ class Args:
     """the entity (team) of wandb's project"""
 
     # Algorithm specific arguments
-    total_timesteps: int = 1_500_000
+    total_timesteps: int = 2_000_000
     """total timesteps of the experiments"""
-    learning_rate: float = 1.5e-3
+    learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 1024
+    num_envs: int = 256
     """the number of parallel game environments"""
-    num_steps: int = 8
+    num_steps: int = 32
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.94
+    gamma: float = 0.99
     """the discount factor gamma"""
-    gae_lambda: float = 0.97
+    gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 8
     """the number of mini-batches"""
-    update_epochs: int = 10
+    update_epochs: int = 5
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -71,13 +71,13 @@ class Args:
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.007
+    ent_coef: float = 0.02
     """coefficient of the entropy"""
     vf_coef: float = 0.7
     """coefficient of the value function"""
     max_grad_norm: float = 1.5
     """the maximum norm for the gradient clipping"""
-    target_kl: float = None
+    target_kl: float = 0.03
     """the target KL divergence threshold"""
 
     # to be filled in runtime
@@ -91,14 +91,14 @@ class Args:
     # Wrapper settings
     n_obs: int = 2
     rpy_coef: float = 0.03
-    d_act_th_coef: float = 0.4
-    d_act_xy_coef: float = 1.0
-    act_coef: float = 0.02
-    progress_coef: float = 6.0
+    d_act_th_coef: float = 0.02
+    d_act_xy_coef: float = 0.05
+    act_coef: float = 0.005
+    progress_coef: float = 10.0
     near_gate_coef: float = 0.15
-    gate_bonus: float = 8.0
-    finish_bonus: float = 25.0
-    crash_penalty: float = 10.0
+    gate_bonus: float = 12.0
+    finish_bonus: float = 40.0
+    crash_penalty: float = 50.0
     obstacle_coef: float = 1.5
     obstacle_margin: float = 0.35
     time_penalty: float = 0.02
@@ -155,15 +155,15 @@ class Level2RaceReward(VectorRewardWrapper):
         self,
         env: VectorEnv,
         *,
-        progress_coef: float = 6.0,
+        progress_coef: float = 10.0,
         near_gate_coef: float = 0.15,
-        gate_bonus: float = 8.0,
-        finish_bonus: float = 25.0,
-        crash_penalty: float = 10.0,
+        gate_bonus: float = 12.0,
+        finish_bonus: float = 40.0,
+        crash_penalty: float = 50.0,
         rpy_coef: float = 0.03,
-        act_coef: float = 0.02,
-        d_act_th_coef: float = 0.4,
-        d_act_xy_coef: float = 1.0,
+        act_coef: float = 0.005,
+        d_act_th_coef: float = 0.02,
+        d_act_xy_coef: float = 0.05,
         obstacle_coef: float = 1.5,
         obstacle_margin: float = 0.35,
         time_penalty: float = 0.02,
@@ -200,19 +200,26 @@ class Level2RaceReward(VectorRewardWrapper):
     def step(self, actions: Array) -> tuple[dict, Array, Array, Array, dict]:
         """Apply action and replace sparse environment reward with shaped reward."""
         observations, _rewards, terminations, truncations, infos = self.env.step(actions)
-        reward, components = self._reward_components(observations, actions, terminations)
+        reward, components, metrics = self._reward_components(
+            observations, actions, terminations, truncations
+        )
         self._prev_gate_dist = self._gate_distance(observations)
         self._prev_target_gate = observations["target_gate"]
         self._last_action = jp.asarray(actions)
 
         infos = dict(infos)
         infos.update({f"reward_{k}": v for k, v in components.items()})
+        infos.update({f"race_{k}": v for k, v in metrics.items()})
         self._maybe_print_debug(components, reward, terminations, truncations, observations)
         return observations, reward, terminations, truncations, infos
 
     def _reward_components(
-        self, observations: dict[str, Array], actions: Array, terminations: Array
-    ) -> tuple[Array, dict[str, Array]]:
+        self,
+        observations: dict[str, Array],
+        actions: Array,
+        terminations: Array,
+        truncations: Array,
+    ) -> tuple[Array, dict[str, Array], dict[str, Array]]:
         gate_dist = self._gate_distance(observations)
         target_gate = observations["target_gate"]
         finished = target_gate < 0
@@ -245,7 +252,15 @@ class Level2RaceReward(VectorRewardWrapper):
             "time": -self.time_penalty * jp.ones_like(gate_dist),
         }
         reward = sum(components.values())
-        return reward, components
+        metrics = {
+            "gate_distance": gate_dist,
+            "passed_gate_rate": passed_gate.astype(jp.float32),
+            "finished_rate": finished.astype(jp.float32),
+            "crashed_rate": crashed.astype(jp.float32),
+            "done_rate": (terminations | truncations).astype(jp.float32),
+            "target_gate": jp.maximum(target_gate, 0).astype(jp.float32),
+        }
+        return reward, components, metrics
 
     def _gate_distance(self, observations: dict[str, Array]) -> Array:
         target_gate = observations["target_gate"]
@@ -478,6 +493,54 @@ def set_seeds(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
+REWARD_COMPONENT_KEYS = (
+    "progress",
+    "near_gate",
+    "gate_bonus",
+    "finish_bonus",
+    "crash",
+    "action",
+    "smooth",
+    "tilt",
+    "obstacle",
+    "time",
+)
+
+RACE_METRIC_KEYS = (
+    "gate_distance",
+    "passed_gate_rate",
+    "finished_rate",
+    "crashed_rate",
+    "done_rate",
+    "target_gate",
+)
+
+
+def mean_scalar(value: Any) -> float:
+    """Convert tensor-like values to a Python mean scalar for logging."""
+    if isinstance(value, torch.Tensor):
+        return value.float().mean().item()
+    return float(np.asarray(value).mean())
+
+
+def setup_wandb(args: Args) -> None:
+    """Start or configure a W&B run with explicit metric names."""
+    if wandb.run is None:
+        wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, config=vars(args))
+    else:
+        wandb.config.update(vars(args), allow_val_change=True)
+
+    wandb.define_metric("global_step")
+    for metric_pattern in (
+        "charts/*",
+        "losses/*",
+        "reward_components/*",
+        "race/*",
+        "train/*",
+    ):
+        wandb.define_metric(metric_pattern, step_metric="global_step")
+
+
 # region MakeEnvs
 def make_envs(
     config: str = "level2.toml",
@@ -511,15 +574,15 @@ def make_envs(
     env = NormalizeVectorActions(env)
     env = Level2RaceReward(
         env,
-        progress_coef=coefs.get("progress_coef", 6.0),
+        progress_coef=coefs.get("progress_coef", 10.0),
         near_gate_coef=coefs.get("near_gate_coef", 0.15),
-        gate_bonus=coefs.get("gate_bonus", 8.0),
-        finish_bonus=coefs.get("finish_bonus", 25.0),
-        crash_penalty=coefs.get("crash_penalty", 10.0),
+        gate_bonus=coefs.get("gate_bonus", 12.0),
+        finish_bonus=coefs.get("finish_bonus", 40.0),
+        crash_penalty=coefs.get("crash_penalty", 50.0),
         rpy_coef=coefs.get("rpy_coef", 0.03),
-        act_coef=coefs.get("act_coef", 0.02),
-        d_act_th_coef=coefs.get("d_act_th_coef", 0.4),
-        d_act_xy_coef=coefs.get("d_act_xy_coef", 1.0),
+        act_coef=coefs.get("act_coef", 0.005),
+        d_act_th_coef=coefs.get("d_act_th_coef", 0.02),
+        d_act_xy_coef=coefs.get("d_act_xy_coef", 0.05),
         obstacle_coef=coefs.get("obstacle_coef", 1.5),
         obstacle_margin=coefs.get("obstacle_margin", 0.35),
         time_penalty=coefs.get("time_penalty", 0.02),
@@ -560,7 +623,7 @@ class Agent(nn.Module):
             nn.Tanh(),
         )
         self.actor_logstd = nn.Parameter(
-            torch.Tensor([[-1, -1, -1, 1]])  # start with smaller std for roll, pitch, yaw
+            torch.tensor([[-1.2, -1.2, -2.0, -0.7]], dtype=torch.float32)
         )
 
     def get_value(self, x: Tensor) -> Tensor:
@@ -592,8 +655,8 @@ def train_ppo(
     An implementation of PPO from cleanrl, see https://docs.cleanrl.dev/.
     """
     # train setup
-    if wandb_enabled and wandb.run is None:
-        wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, config=vars(args))
+    if wandb_enabled:
+        setup_wandb(args)
     train_start_time = time.time()
     set_seeds(args.seed)  # TRY NOT TO MODIFY: seeding
     print("Training on device:", device, "| Environment device:", jax_device)
@@ -653,6 +716,9 @@ def train_ppo(
 
     for iteration in range(1, args.num_iterations + 1):
         start_time = time.time()
+        reward_component_sums = dict.fromkeys(REWARD_COMPONENT_KEYS, 0.0)
+        race_metric_sums = dict.fromkeys(RACE_METRIC_KEYS, 0.0)
+        reward_component_batches = 0
 
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -676,13 +742,25 @@ def train_ppo(
             next_obs, reward, terminations, truncations, infos = envs.step(action)
             # envs.render()
             rewards[step] = reward
-            sum_rewards += reward
             sum_rewards[next_done.bool()] = 0
+            sum_rewards += reward
             next_done = terminations | truncations
+
+            if wandb_enabled:
+                reward_component_batches += 1
+                for key in REWARD_COMPONENT_KEYS:
+                    if (value := infos.get(f"reward_{key}")) is not None:
+                        reward_component_sums[key] += mean_scalar(value)
+                for key in RACE_METRIC_KEYS:
+                    if (value := infos.get(f"race_{key}")) is not None:
+                        race_metric_sums[key] += mean_scalar(value)
 
             if wandb_enabled and next_done.any():
                 for r in sum_rewards[next_done.bool()]:
-                    wandb.log({"train/reward": r.item()}, step=global_step)
+                    wandb.log(
+                        {"global_step": global_step, "train/reward": r.item()},
+                        step=global_step,
+                    )
                     sum_rewards_hist.append(r.item())
 
         # bootstrap value if not done
@@ -775,8 +853,24 @@ def train_ppo(
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if wandb_enabled:
+            reward_component_logs = {}
+            race_metric_logs = {}
+            if reward_component_batches > 0:
+                reward_component_logs = {
+                    f"reward_components/{key}": value / reward_component_batches
+                    for key, value in reward_component_sums.items()
+                }
+                race_metric_logs = {
+                    f"race/{key}": value / reward_component_batches
+                    for key, value in race_metric_sums.items()
+                }
+                if args.gate_bonus:
+                    reward_component_logs["reward_components/gate_bonus_rate"] = (
+                        reward_component_logs["reward_components/gate_bonus"] / args.gate_bonus
+                    )
             wandb.log(
                 {
+                    "global_step": global_step,
                     "charts/learning_rate": optimizer.param_groups[0]["lr"],
                     "losses/value_loss": v_loss.item(),
                     "losses/policy_loss": pg_loss.item(),
@@ -786,6 +880,8 @@ def train_ppo(
                     "losses/clipfrac": np.mean(clipfracs),
                     "losses/explained_variance": explained_var,
                     "charts/SPS": int(global_step / (time.time() - start_time)),
+                    **reward_component_logs,
+                    **race_metric_logs,
                 },
                 step=global_step,
             )
@@ -907,25 +1003,31 @@ def main(
     train: bool = True,
     eval: int = 0,
     debug_steps: int = 0,
-    total_timesteps: int = 1_500_000,
-    num_envs: int = 1024,
-    num_steps: int = 8,
-    learning_rate: float = 1.5e-3,
+    total_timesteps: int = 2_000_000,
+    num_envs: int = 256,
+    num_steps: int = 32,
+    learning_rate: float = 3e-4,
+    gamma: float = 0.99,
+    gae_lambda: float = 0.95,
+    update_epochs: int = 5,
+    num_minibatches: int = 8,
+    ent_coef: float = 0.02,
+    target_kl: float = 0.03,
     cuda: bool = True,
     jax_device: str = "gpu",
     model_name: str = "ppo_level2_racing.ckpt",
     n_obs: int = 2,
-    progress_coef: float = 6.0,
+    progress_coef: float = 10.0,
     near_gate_coef: float = 0.15,
-    gate_bonus: float = 8.0,
-    finish_bonus: float = 25.0,
-    crash_penalty: float = 10.0,
+    gate_bonus: float = 12.0,
+    finish_bonus: float = 40.0,
+    crash_penalty: float = 50.0,
     obstacle_coef: float = 1.5,
     obstacle_margin: float = 0.35,
     time_penalty: float = 0.02,
-    act_coef: float = 0.02,
-    d_act_th_coef: float = 0.4,
-    d_act_xy_coef: float = 1.0,
+    act_coef: float = 0.005,
+    d_act_th_coef: float = 0.02,
+    d_act_xy_coef: float = 0.05,
     rpy_coef: float = 0.03,
     debug_obs: bool = False,
     debug_reward_every: int = 0,
@@ -937,6 +1039,12 @@ def main(
         num_envs=num_envs,
         num_steps=num_steps,
         learning_rate=learning_rate,
+        gamma=gamma,
+        gae_lambda=gae_lambda,
+        update_epochs=update_epochs,
+        num_minibatches=num_minibatches,
+        ent_coef=ent_coef,
+        target_kl=target_kl,
         cuda=cuda,
         jax_device=jax_device,
         n_obs=n_obs,
