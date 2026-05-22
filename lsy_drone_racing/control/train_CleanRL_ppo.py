@@ -532,7 +532,7 @@ class RaceObservation(VectorObservationWrapper):
         self.n_obstacles = raw_space["obstacles_pos"].shape[0]
         self.action_dim = env.single_action_space.shape[0]
         self.layout = self._build_layout()
-        self.obs_dim = self.layout[-1][1].stop  # 91dim
+        self.obs_dim = self.layout[-1][1].stop
         self.single_observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32
         )
@@ -579,6 +579,7 @@ class RaceObservation(VectorObservationWrapper):
         add("ang_vel", 3)
         add("rotmat", 9)
         add("target_progress", 1)
+        add("gate_prev_corners_body", 12)
         add("gate_current_corners_body", 12)
         add("gate_next_corners_body", 12)
         add("obstacles_body", 3 * self.n_obstacles)
@@ -598,6 +599,18 @@ class RaceObservation(VectorObservationWrapper):
         rot = self.quat_to_rotmat(quat)
         rot_t = jp.swapaxes(rot, -1, -2)
         vel_body = jp.einsum("nij,nj->ni", rot_t, vel)
+        active_target_gate = jp.where(
+            observations["target_gate"] < 0,
+            self.n_gates - 1,
+            observations["target_gate"],
+        )
+        prev_gate = jp.maximum(active_target_gate - 1, 0)
+        gate_prev = self._gate_corners_body(observations, prev_gate, pos, rot_t)
+        gate_prev = jp.where(
+            (active_target_gate > 0)[:, None],
+            gate_prev,
+            jp.zeros_like(gate_prev),
+        )
         gate_current = self._gate_corners_body(
             observations, observations["target_gate"], pos, rot_t
         )
@@ -616,6 +629,7 @@ class RaceObservation(VectorObservationWrapper):
             ang_vel,
             rot.reshape(pos.shape[0], -1),
             target_progress.astype(jp.float32),
+            gate_prev,
             gate_current,
             gate_next,
             obstacles_body,
@@ -872,7 +886,13 @@ class Agent(nn.Module):
 
 # region Train
 def train_ppo(
-    args: Args, model_path: Path, device: torch.device, jax_device: str, wandb_enabled: bool = False
+    args: Args,
+    model_path: Path | None,
+    device: torch.device,
+    jax_device: str,
+    wandb_enabled: bool = False,
+    checkpoint_dir: Path | str | None = None,
+    checkpoint_interval: int = 0,
 ) -> None:
     """Train.
 
@@ -884,6 +904,16 @@ def train_ppo(
     train_start_time = time.time()
     set_seeds(args.seed)  # TRY NOT TO MODIFY: seeding
     print("Training on device:", device, "| Environment device:", jax_device)
+
+    checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
+    if checkpoint_interval > 0:
+        if checkpoint_dir is None:
+            checkpoint_dir = model_path.parent if model_path is not None else Path("checkpoints")
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    next_checkpoint_step = checkpoint_interval if checkpoint_interval > 0 else None
+    checkpoint_stem = (
+        model_path.stem.removesuffix("_final") if model_path is not None else "ppo_checkpoint"
+    )
 
     # env setup
     r_coefs = {
@@ -1120,9 +1150,15 @@ def train_ppo(
             )
         end_time = time.time()
         print(f"Iter {iteration}/{args.num_iterations} took {end_time - start_time:.2f} seconds")
+        while next_checkpoint_step is not None and global_step >= next_checkpoint_step:
+            checkpoint_path = checkpoint_dir / f"{checkpoint_stem}_step_{next_checkpoint_step:09d}.ckpt"
+            torch.save(agent.state_dict(), checkpoint_path)
+            print(f"checkpoint saved to {checkpoint_path} at global_step={global_step}")
+            next_checkpoint_step += checkpoint_interval
     train_end_time = time.time()
     print(f"Training for {global_step} steps took {train_end_time - train_start_time:.2f} seconds.")
     if model_path is not None:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(agent.state_dict(), model_path)
         print(f"model saved to {model_path}")
     envs.close()
@@ -1267,6 +1303,8 @@ def main(
     cuda: bool = True,
     jax_device: str = "gpu",
     model_name: str = "ppo_level2_racing.ckpt",
+    checkpoint_dir: str | None = None,
+    checkpoint_interval: int = 0,
     n_obs: int = 2,
     progress_coef: float = 10.0,
     gate_axis_coef: float = 8.0,
@@ -1339,7 +1377,15 @@ def main(
         debug_rollout(args, debug_steps, device, args.jax_device)
 
     if train:  # use "--train False" to skip training
-        train_ppo(args, model_path, device, args.jax_device, wandb_enabled)
+        train_ppo(
+            args,
+            model_path,
+            device,
+            args.jax_device,
+            wandb_enabled,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_interval=checkpoint_interval,
+        )
 
     if eval > 0:  # use "--eval <N>" to perform N evaluation episodes
         episode_rewards, episode_lengths = evaluate_ppo(args, eval, model_path)

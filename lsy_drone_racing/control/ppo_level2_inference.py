@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "ppo_level2_notebook_gatepass1.ckpt"
+MODEL_NAME = "checkpoints/ppo_level2_prev_gate/ppo_level2_gatepass1024_final.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(
@@ -109,6 +109,7 @@ class PPOLevel2Inference(Controller):
             + 1
             + 12
             + 12
+            + 12
             + 3 * self.n_obstacles
             + self.n_gates
             + self.n_obstacles
@@ -151,7 +152,7 @@ class PPOLevel2Inference(Controller):
         return self._scale_action(action_norm_np).astype(np.float32)
 
     def _obs_rl(self, obs: dict[str, NDArray[np.floating]]) -> NDArray[np.float32]:
-        """Build the same flat 91-D observation vector as RaceObservation in training."""
+        """Build the same flat observation vector as RaceObservation in training."""
         pos = np.asarray(obs["pos"], dtype=np.float32)
         quat = np.asarray(obs["quat"], dtype=np.float32)
         vel = np.asarray(obs["vel"], dtype=np.float32)
@@ -161,6 +162,11 @@ class PPOLevel2Inference(Controller):
         rot = self.quat_to_rotmat(quat)
         rot_t = rot.T
         vel_body = rot_t @ vel
+        active_target_gate = self.n_gates - 1 if target_gate < 0 else target_gate
+        prev_gate = max(active_target_gate - 1, 0)
+        gate_prev = self._gate_corners_body(obs, prev_gate, pos, rot_t)
+        if active_target_gate <= 0:
+            gate_prev = np.zeros_like(gate_prev)
         gate_current = self._gate_corners_body(obs, target_gate, pos, rot_t)
         next_gate = min(max(target_gate, 0) + 1, self.n_gates - 1)
         gate_next = self._gate_corners_body(obs, next_gate, pos, rot_t)
@@ -177,6 +183,7 @@ class PPOLevel2Inference(Controller):
                 ang_vel,
                 rot.reshape(-1),
                 target_progress,
+                gate_prev,
                 gate_current,
                 gate_next,
                 obstacles_body,
