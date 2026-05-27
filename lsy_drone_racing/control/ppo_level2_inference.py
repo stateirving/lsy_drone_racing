@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "checkpoints/ppo_level2_safe/ppo_level2_safe_final.ckpt"
+MODEL_NAME = "checkpoints/ppo_level2_80crashpenalty/ppo_level2_80crashpenalty_step_220000000.ckpt"
 # MODEL_NAME = "ppo_level2_notebook_gatepass1.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
