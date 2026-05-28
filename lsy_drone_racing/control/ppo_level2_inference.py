@@ -17,12 +17,12 @@ from lsy_drone_racing.control import Controller
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+# 70%
 
-MODEL_NAME = "checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/ppo_level2_cmdtilt_tilt30_rpy2_excess20_step_080000000.ckpt"
-# best：
-# MODEL_NAME = "checkpoints/ppo_level2_tilt35_rpy1_excess10/ppo_level2_tilt35_rpy1_excess10_step_100000000.ckpt"
+# MODEL_NAME = "checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/ppo_level2_cmdtilt_tilt30_rpy2_excess20_step_080000000.ckpt"
 
-# MODEL_NAME = "ppo_level2_notebook_gatepass1.ckpt"
+MODEL_NAME = "checkpoints/ppo_level2_cmdtilt1p5_160M/ppo_level2_cmdtilt1p5_160M_step_100000000.ckpt"
+
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(
