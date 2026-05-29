@@ -18,11 +18,11 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 # 70%
-
 # MODEL_NAME = "checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/ppo_level2_cmdtilt_tilt30_rpy2_excess20_step_080000000.ckpt"
-
-MODEL_NAME = "checkpoints/ppo_level2_cmdtilt1p5_160M/ppo_level2_cmdtilt1p5_160M_step_100000000.ckpt"
-
+# most smooth
+# MODEL_NAME = "checkpoints/ppo_level2_cmdtilt1p5_160M/ppo_level2_cmdtilt1p5_160M_step_100000000.ckpt"
+# 87.5% 5.86s
+MODEL_NAME = "checkpoints/ppo_level2_timepenalty001/ppo_level2_timepenalty001_step_140000000.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(

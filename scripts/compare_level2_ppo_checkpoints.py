@@ -84,11 +84,18 @@ def checkpoint_sort_key(path: Path) -> tuple[int, str]:
     return (10**18, path.name)
 
 
-def checkpoint_label(path: Path) -> tuple[str, float | str]:
-    """Return a display name and the step in millions if present."""
+def checkpoint_step(path: Path) -> int | None:
+    """Return the numeric checkpoint step, or None for non-step checkpoints."""
     match = re.search(r"_step_(\d+)\.ckpt$", path.name)
     if match:
-        step = int(match.group(1))
+        return int(match.group(1))
+    return None
+
+
+def checkpoint_label(path: Path) -> tuple[str, float | str]:
+    """Return a display name and the step in millions if present."""
+    step = checkpoint_step(path)
+    if step is not None:
         return (f"{step // 1_000_000}M", step / 1_000_000)
     return ("final", "final")
 
@@ -469,6 +476,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--num-seeds", type=int, default=40)
     parser.add_argument("--out-prefix", type=Path, default=DEFAULT_OUT_PREFIX)
+    parser.add_argument(
+        "--min-step",
+        type=int,
+        default=None,
+        help="Only evaluate step checkpoints with at least this many timesteps; final is kept.",
+    )
     parser.add_argument("--tilt-limit-deg", type=float, default=30.0)
     parser.add_argument("--safety-tol-m", type=float, default=1e-3)
     return parser.parse_args()
@@ -477,6 +490,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run the checkpoint comparison."""
     args = parse_args()
+    checkpoint_dir = args.checkpoint_dir.resolve()
     config = load_config(ROOT / "config" / args.config)
     run_args = make_args(args.config)
     device = torch.device("cpu")
@@ -490,9 +504,16 @@ def main() -> None:
     base_env = env.env.env.env.env
     base_env.settings = base_env.settings.replace(autoreset=False)
     base_env._step = base_env.build_step_fn()
-    checkpoints = sorted(args.checkpoint_dir.glob("*.ckpt"), key=checkpoint_sort_key)
+    checkpoints = sorted(checkpoint_dir.glob("*.ckpt"), key=checkpoint_sort_key)
+    if args.min_step is not None:
+        checkpoints = [
+            checkpoint_path
+            for checkpoint_path in checkpoints
+            if checkpoint_step(checkpoint_path) is None
+            or checkpoint_step(checkpoint_path) >= args.min_step
+        ]
     if not checkpoints:
-        raise FileNotFoundError(f"No checkpoints found in {args.checkpoint_dir}")
+        raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
     seeds = list(range(args.seed_start, args.seed_start + args.num_seeds))
     pos_limit_low = np.asarray(config.env.track.safety_limits.pos_limit_low, dtype=np.float64)
     pos_limit_high = np.asarray(config.env.track.safety_limits.pos_limit_high, dtype=np.float64)
