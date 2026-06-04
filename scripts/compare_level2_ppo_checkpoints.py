@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from lsy_drone_racing.control.ppo_level2_observation import OBSERVATION_LAYOUT, unpack_checkpoint
 from lsy_drone_racing.control.train_CleanRL_ppo import Agent, Args, make_envs
 from lsy_drone_racing.utils import load_config
 
@@ -142,9 +143,13 @@ def make_args(config: str) -> Args:
 def load_agent(env: Any, checkpoint_path: Path, device: torch.device) -> Agent:
     """Load one PPO agent and validate the observation shape."""
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        checkpoint = checkpoint["model_state_dict"]
-    obs_dim = int(checkpoint["actor_mean.0.weight"].shape[1])
+    model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
+    if observation_layout != OBSERVATION_LAYOUT:
+        raise ValueError(
+            f"{checkpoint_path.name} uses {observation_layout}, but this vector evaluator uses "
+            f"{OBSERVATION_LAYOUT}."
+        )
+    obs_dim = int(model_state_dict["actor_mean.0.weight"].shape[1])
     expected_dim = int(np.prod(env.single_observation_space.shape))
     if obs_dim != expected_dim:
         raise ValueError(
@@ -152,7 +157,7 @@ def load_agent(env: Any, checkpoint_path: Path, device: torch.device) -> Agent:
             f"but env observation dim is {expected_dim}."
         )
     agent = Agent(env.single_observation_space.shape, env.single_action_space.shape).to(device)
-    agent.load_state_dict(checkpoint)
+    agent.load_state_dict(model_state_dict)
     agent.eval()
     return agent
 

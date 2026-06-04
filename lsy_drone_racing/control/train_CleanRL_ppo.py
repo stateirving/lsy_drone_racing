@@ -23,6 +23,11 @@ from torch import Tensor
 from torch.distributions.normal import Normal
 
 import wandb
+from lsy_drone_racing.control.ppo_level2_observation import (
+    OBSERVATION_LAYOUT,
+    make_checkpoint,
+    unpack_checkpoint,
+)
 from lsy_drone_racing.utils import load_config
 
 
@@ -113,6 +118,8 @@ class Args:
     crash_penalty: float = 50.0
     obstacle_coef: float = 1.5
     obstacle_margin: float = 0.35
+    obstacle_clearance_coef: float = 0.0
+    timeout_penalty: float = 0.0
     time_penalty: float = 0.05
     debug_obs: bool = False
     debug_reward_every: int = 0
@@ -190,6 +197,8 @@ class Level2RaceReward(VectorRewardWrapper):
         missed_gate_penalty: float = 8.0,
         obstacle_coef: float = 1.5,
         obstacle_margin: float = 0.35,
+        obstacle_clearance_coef: float = 0.0,
+        timeout_penalty: float = 0.0,
         time_penalty: float = 0.05,
         debug_every: int = 0,
     ):
@@ -218,6 +227,8 @@ class Level2RaceReward(VectorRewardWrapper):
         self.missed_gate_penalty = missed_gate_penalty
         self.obstacle_coef = obstacle_coef
         self.obstacle_margin = obstacle_margin
+        self.obstacle_clearance_coef = obstacle_clearance_coef
+        self.timeout_penalty = timeout_penalty
         self.time_penalty = time_penalty
         self.debug_every = debug_every
         action_sim_low = np.asarray(getattr(env, "action_sim_low"), dtype=np.float32)
@@ -235,6 +246,7 @@ class Level2RaceReward(VectorRewardWrapper):
         self._back_gate_active = jp.zeros((self.num_envs,), dtype=bool)
         self._back_gate_idx = jp.zeros((self.num_envs,), dtype=jp.int32)
         self._prev_back_gate_local = jp.zeros((self.num_envs, 3), dtype=jp.float32)
+        self._prev_obstacle_dist = jp.zeros((self.num_envs,), dtype=jp.float32)
 
     def reset(self, seed: int | None = None, options: dict | None = None) -> tuple[dict, dict]:
         """Reset wrapper state from raw race observations."""
@@ -251,6 +263,7 @@ class Level2RaceReward(VectorRewardWrapper):
         self._back_gate_active = jp.zeros((self.num_envs,), dtype=bool)
         self._back_gate_idx = jp.zeros((self.num_envs,), dtype=jp.int32)
         self._prev_back_gate_local = jp.zeros((self.num_envs, 3), dtype=jp.float32)
+        self._prev_obstacle_dist = self._closest_obstacle_distance(observations)
         return observations, infos
 
     def step(self, actions: Array) -> tuple[dict, Array, Array, Array, dict]:
@@ -276,6 +289,7 @@ class Level2RaceReward(VectorRewardWrapper):
         self._back_gate_active = new_back_gate_active
         self._back_gate_idx = new_back_gate_idx
         self._prev_back_gate_local = new_prev_back_gate_local
+        self._prev_obstacle_dist = self._closest_obstacle_distance(observations)
         self._last_action = jp.asarray(actions)
 
         infos = dict(infos)
@@ -297,6 +311,7 @@ class Level2RaceReward(VectorRewardWrapper):
         passed_gate = (target_gate != self._prev_target_gate) & (self._prev_target_gate >= 0)
         target_changed = target_gate != self._prev_target_gate
         crashed = terminations & ~finished
+        timed_out = truncations & ~finished
 
         raw_progress = self._prev_gate_dist - gate_dist
         progress = jp.where(passed_gate | finished, 0.0, jp.clip(raw_progress, -0.25, 0.25))
@@ -400,7 +415,17 @@ class Level2RaceReward(VectorRewardWrapper):
         tilt = self._tilt(observations["quat"])
         tilt_angle = self._tilt_angle(observations["quat"])
         tilt_excess = jp.maximum(0.0, tilt_angle - self.tilt_limit_rad) ** 2
-        obstacle_penalty = self._obstacle_penalty(observations)
+        obstacle_dist = self._closest_obstacle_distance(observations)
+        obstacle_penalty = jp.maximum(0.0, self.obstacle_margin - obstacle_dist) ** 2
+        obstacle_clearance_progress = jp.clip(
+            obstacle_dist - self._prev_obstacle_dist, -0.1, 0.1
+        )
+        clearance_active = (
+            jp.minimum(obstacle_dist, self._prev_obstacle_dist) < 1.5 * self.obstacle_margin
+        ) & ~(terminations | truncations)
+        obstacle_clearance_progress = jp.where(
+            clearance_active, obstacle_clearance_progress, 0.0
+        )
 
         components = {
             "progress": self.progress_coef * progress,
@@ -421,6 +446,8 @@ class Level2RaceReward(VectorRewardWrapper):
             "tilt": -self.rpy_coef * tilt,
             "tilt_excess": -self.tilt_excess_coef * tilt_excess,
             "obstacle": -self.obstacle_coef * obstacle_penalty,
+            "obstacle_clearance": self.obstacle_clearance_coef * obstacle_clearance_progress,
+            "timeout": -self.timeout_penalty * timed_out.astype(jp.float32),
             "time": -self.time_penalty * jp.ones_like(gate_dist),
         }
         reward = sum(components.values())
@@ -441,6 +468,9 @@ class Level2RaceReward(VectorRewardWrapper):
             "gate_pass_hit_rate": gate_pass_hit.astype(jp.float32),
             "gate_back_hit_rate": back_hit.astype(jp.float32),
             "wrong_side_gate_rate": wrong_side_gate.astype(jp.float32),
+            "timeout_rate": timed_out.astype(jp.float32),
+            "obstacle_distance": obstacle_dist,
+            "obstacle_clearance_progress": obstacle_clearance_progress,
             "tilt_angle_deg": jp.rad2deg(tilt_angle),
             "cmd_tilt_deg": jp.rad2deg(cmd_tilt),
         }
@@ -509,10 +539,10 @@ class Level2RaceReward(VectorRewardWrapper):
         body_z_world_z = jp.clip(jp.cos(roll_cmd) * jp.cos(pitch_cmd), -1.0, 1.0)
         return jp.arccos(body_z_world_z)
 
-    def _obstacle_penalty(self, observations: dict[str, Array]) -> Array:
+    @staticmethod
+    def _closest_obstacle_distance(observations: dict[str, Array]) -> Array:
         dxy = observations["obstacles_pos"][..., :2] - observations["pos"][:, None, :2]
-        closest_xy = jp.min(jp.linalg.norm(dxy, axis=-1), axis=-1)
-        return jp.maximum(0.0, self.obstacle_margin - closest_xy) ** 2
+        return jp.min(jp.linalg.norm(dxy, axis=-1), axis=-1)
 
     def _maybe_print_debug(
         self,
@@ -616,9 +646,8 @@ class RaceObservation(VectorObservationWrapper):
         add("gate_prev_corners_body", 12)
         add("gate_current_corners_body", 12)
         add("gate_next_corners_body", 12)
-        add("obstacles_body", 3 * self.n_obstacles)
+        add("obstacles_heading_xy", 4 * self.n_obstacles)
         add("gates_visited", self.n_gates)
-        add("obstacles_visited", self.n_obstacles)
         add("last_action", self.action_dim)
         add("history", self.n_history * self.HISTORY_DIM)
         return layout
@@ -650,9 +679,7 @@ class RaceObservation(VectorObservationWrapper):
         )
         next_gate = jp.minimum(jp.maximum(observations["target_gate"], 0) + 1, self.n_gates - 1)
         gate_next = self._gate_corners_body(observations, next_gate, pos, rot_t)
-        obstacles_body = jp.einsum(
-            "nij,nkj->nki", rot_t, observations["obstacles_pos"] - pos[:, None, :]
-        ).reshape(pos.shape[0], -1)
+        obstacles_heading_xy = self._obstacle_heading_xy(observations, pos, rot)
         target_progress = (
             jp.where(observations["target_gate"] < 0, self.n_gates, observations["target_gate"])
             / self.n_gates
@@ -666,13 +693,26 @@ class RaceObservation(VectorObservationWrapper):
             gate_prev,
             gate_current,
             gate_next,
-            obstacles_body,
+            obstacles_heading_xy,
             observations["gates_visited"].astype(jp.float32),
-            observations["obstacles_visited"].astype(jp.float32),
             last_action,
             history.reshape(pos.shape[0], -1),
         ]
         return jp.concatenate(parts, axis=-1)
+
+    @staticmethod
+    def _obstacle_heading_xy(observations: dict[str, Array], pos: Array, rot: Array) -> Array:
+        """Return fixed-order [forward, left, XY distance, detected] obstacle features."""
+        relative_xy = observations["obstacles_pos"][..., :2] - pos[:, None, :2]
+        heading_forward = rot[:, :2, 0]
+        heading_forward /= jp.maximum(jp.linalg.norm(heading_forward, axis=-1, keepdims=True), 1e-6)
+        heading_left = jp.stack([-heading_forward[:, 1], heading_forward[:, 0]], axis=-1)
+        relative_forward = jp.einsum("nki,ni->nk", relative_xy, heading_forward)
+        relative_left = jp.einsum("nki,ni->nk", relative_xy, heading_left)
+        distance_xy = jp.linalg.norm(relative_xy, axis=-1)
+        detected = observations["obstacles_visited"].astype(jp.float32)
+        features = jp.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
+        return features.reshape(pos.shape[0], -1)
 
     def _gate_corners_body(
         self, observations: dict[str, Array], gate_idx: Array, pos: Array, rot_t: Array
@@ -758,6 +798,8 @@ REWARD_COMPONENT_KEYS = (
     "tilt",
     "tilt_excess",
     "obstacle",
+    "obstacle_clearance",
+    "timeout",
     "time",
 )
 
@@ -778,6 +820,9 @@ RACE_METRIC_KEYS = (
     "gate_pass_hit_rate",
     "gate_back_hit_rate",
     "wrong_side_gate_rate",
+    "timeout_rate",
+    "obstacle_distance",
+    "obstacle_clearance_progress",
     "tilt_angle_deg",
     "cmd_tilt_deg",
 )
@@ -796,6 +841,7 @@ def setup_wandb(args: Args) -> None:
         wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, config=vars(args))
     else:
         wandb.config.update(vars(args), allow_val_change=True)
+    wandb.config.update({"observation_layout": OBSERVATION_LAYOUT}, allow_val_change=True)
 
     wandb.define_metric("global_step")
     for metric_pattern in (
@@ -864,6 +910,8 @@ def make_envs(
         missed_gate_penalty=coefs.get("missed_gate_penalty", 8.0),
         obstacle_coef=coefs.get("obstacle_coef", 1.5),
         obstacle_margin=coefs.get("obstacle_margin", 0.35),
+        obstacle_clearance_coef=coefs.get("obstacle_clearance_coef", 0.0),
+        timeout_penalty=coefs.get("timeout_penalty", 0.0),
         time_penalty=coefs.get("time_penalty", 0.05),
         debug_every=debug_reward_every,
     )
@@ -934,6 +982,7 @@ def train_ppo(
     wandb_enabled: bool = False,
     checkpoint_dir: Path | str | None = None,
     checkpoint_interval: int = 0,
+    initial_model_path: Path | str | None = None,
 ) -> None:
     """Train.
 
@@ -946,6 +995,9 @@ def train_ppo(
     set_seeds(args.seed)  # TRY NOT TO MODIFY: seeding
     print("Training on device:", device, "| Environment device:", jax_device)
 
+    initial_model_path = Path(initial_model_path) if initial_model_path is not None else None
+    if wandb_enabled and initial_model_path is not None:
+        wandb.config.update({"initial_model_path": str(initial_model_path)}, allow_val_change=True)
     checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
     if checkpoint_interval > 0:
         if checkpoint_dir is None:
@@ -982,6 +1034,8 @@ def train_ppo(
         "crash_penalty": args.crash_penalty,
         "obstacle_coef": args.obstacle_coef,
         "obstacle_margin": args.obstacle_margin,
+        "obstacle_clearance_coef": args.obstacle_clearance_coef,
+        "timeout_penalty": args.timeout_penalty,
         "time_penalty": args.time_penalty,
     }
     envs = make_envs(
@@ -998,6 +1052,16 @@ def train_ppo(
     )
 
     agent = Agent(envs.single_observation_space.shape, envs.single_action_space.shape).to(device)
+    if initial_model_path is not None:
+        checkpoint = torch.load(initial_model_path, map_location=device)
+        model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
+        if observation_layout != OBSERVATION_LAYOUT:
+            raise ValueError(
+                f"Cannot initialize {OBSERVATION_LAYOUT} training from checkpoint layout "
+                f"{observation_layout}. Train from scratch or use a matching checkpoint."
+            )
+        agent.load_state_dict(model_state_dict)
+        print(f"initialized agent weights from {initial_model_path}; optimizer starts fresh")
     optimizer = optim.AdamW(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
@@ -1197,15 +1261,16 @@ def train_ppo(
         end_time = time.time()
         print(f"Iter {iteration}/{args.num_iterations} took {end_time - start_time:.2f} seconds")
         while next_checkpoint_step is not None and global_step >= next_checkpoint_step:
-            checkpoint_path = checkpoint_dir / f"{checkpoint_stem}_step_{next_checkpoint_step:09d}.ckpt"
-            torch.save(agent.state_dict(), checkpoint_path)
+            checkpoint_name = f"{checkpoint_stem}_step_{next_checkpoint_step:09d}.ckpt"
+            checkpoint_path = checkpoint_dir / checkpoint_name
+            torch.save(make_checkpoint(agent.state_dict()), checkpoint_path)
             print(f"checkpoint saved to {checkpoint_path} at global_step={global_step}")
             next_checkpoint_step += checkpoint_interval
     train_end_time = time.time()
     print(f"Training for {global_step} steps took {train_end_time - train_start_time:.2f} seconds.")
     if model_path is not None:
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(agent.state_dict(), model_path)
+        torch.save(make_checkpoint(agent.state_dict()), model_path)
         print(f"model saved to {model_path}")
     envs.close()
 
@@ -1242,13 +1307,21 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
         "crash_penalty": args.crash_penalty,
         "obstacle_coef": args.obstacle_coef,
         "obstacle_margin": args.obstacle_margin,
+        "obstacle_clearance_coef": args.obstacle_clearance_coef,
+        "timeout_penalty": args.timeout_penalty,
         "time_penalty": args.time_penalty,
     }
     eval_env = make_envs(config=args.config, num_envs=1, coefs=r_coefs)
     agent = Agent(eval_env.single_observation_space.shape, eval_env.single_action_space.shape).to(
         device
     )
-    agent.load_state_dict(torch.load(model_path, map_location=device))
+    checkpoint = torch.load(model_path, map_location=device)
+    model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
+    if observation_layout != OBSERVATION_LAYOUT:
+        raise ValueError(
+            f"Cannot evaluate checkpoint layout {observation_layout} with {OBSERVATION_LAYOUT} env."
+        )
+    agent.load_state_dict(model_state_dict)
     with torch.no_grad():
         episode_rewards = []
         episode_lengths = []
@@ -1305,6 +1378,8 @@ def debug_rollout(args: Args, n_steps: int, device: torch.device, jax_device: st
         "crash_penalty": args.crash_penalty,
         "obstacle_coef": args.obstacle_coef,
         "obstacle_margin": args.obstacle_margin,
+        "obstacle_clearance_coef": args.obstacle_clearance_coef,
+        "timeout_penalty": args.timeout_penalty,
         "time_penalty": args.time_penalty,
     }
     envs = make_envs(
@@ -1355,6 +1430,7 @@ def main(
     cuda: bool = True,
     jax_device: str = "gpu",
     model_name: str = "ppo_level2_racing.ckpt",
+    initial_model_name: str | None = None,
     checkpoint_dir: str | None = None,
     checkpoint_interval: int = 0,
     n_obs: int = 2,
@@ -1374,6 +1450,8 @@ def main(
     crash_penalty: float = 50.0,
     obstacle_coef: float = 1.5,
     obstacle_margin: float = 0.35,
+    obstacle_clearance_coef: float = 0.0,
+    timeout_penalty: float = 0.0,
     time_penalty: float = 0.05,
     act_coef: float = 0.005,
     d_act_th_coef: float = 0.02,
@@ -1417,6 +1495,8 @@ def main(
         crash_penalty=crash_penalty,
         obstacle_coef=obstacle_coef,
         obstacle_margin=obstacle_margin,
+        obstacle_clearance_coef=obstacle_clearance_coef,
+        timeout_penalty=timeout_penalty,
         time_penalty=time_penalty,
         act_coef=act_coef,
         d_act_th_coef=d_act_th_coef,
@@ -1429,6 +1509,7 @@ def main(
         debug_reward_every=debug_reward_every,
     )
     model_path = Path(__file__).parent / model_name
+    initial_model_path = Path(__file__).parent / initial_model_name if initial_model_name else None
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     if debug_steps > 0:
@@ -1443,6 +1524,7 @@ def main(
             wandb_enabled,
             checkpoint_dir=checkpoint_dir,
             checkpoint_interval=checkpoint_interval,
+            initial_model_path=initial_model_path,
         )
 
     if eval > 0:  # use "--eval <N>" to perform N evaluation episodes

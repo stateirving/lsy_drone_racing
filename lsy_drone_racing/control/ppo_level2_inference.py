@@ -13,16 +13,19 @@ from torch import Tensor
 from torch.distributions.normal import Normal
 
 from lsy_drone_racing.control import Controller
+from lsy_drone_racing.control.ppo_level2_observation import (
+    LEGACY_OBSERVATION_LAYOUT,
+    OBSERVATION_LAYOUT,
+    unpack_checkpoint,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-# 70%
-# MODEL_NAME = "checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/ppo_level2_cmdtilt_tilt30_rpy2_excess20_step_080000000.ckpt"
-# most smooth
-# MODEL_NAME = "checkpoints/ppo_level2_cmdtilt1p5_160M/ppo_level2_cmdtilt1p5_160M_step_100000000.ckpt"
-# 87.5% 5.86s
-MODEL_NAME = "checkpoints/ppo_level2_timepenalty001/ppo_level2_timepenalty001_step_140000000.ckpt"
+# Previous legacy-observation checkpoints:
+# checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/..._step_080000000.ckpt
+# checkpoints/ppo_level2_cmdtilt1p5_160M/..._step_100000000.ckpt
+MODEL_NAME = "checkpoints/ppo_level2_obs2/ppo_level2_obs2_step_100000000.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(
@@ -114,9 +117,8 @@ class PPOLevel2Inference(Controller):
             + 12
             + 12
             + 12
-            + 3 * self.n_obstacles
+            + 4 * self.n_obstacles
             + self.n_gates
-            + self.n_obstacles
             + self.action_dim
             + N_HISTORY * HISTORY_DIM
         )
@@ -126,9 +128,10 @@ class PPOLevel2Inference(Controller):
         if not model_path.exists():
             raise FileNotFoundError(f"PPO checkpoint not found: {model_path}")
         checkpoint = torch.load(model_path, map_location=self.device)
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            checkpoint = checkpoint["model_state_dict"]
-        self.obs_dim = int(checkpoint["actor_mean.0.weight"].shape[1])
+        model_state_dict, self.observation_layout = unpack_checkpoint(checkpoint)
+        if self.observation_layout not in (LEGACY_OBSERVATION_LAYOUT, OBSERVATION_LAYOUT):
+            raise ValueError(f"Unsupported PPO observation layout: {self.observation_layout}")
+        self.obs_dim = int(model_state_dict["actor_mean.0.weight"].shape[1])
         self._include_prev_gate = self.obs_dim == current_obs_dim
         if self.obs_dim not in (current_obs_dim, current_obs_dim - 12):
             raise ValueError(
@@ -136,7 +139,7 @@ class PPOLevel2Inference(Controller):
                 f"expected {current_obs_dim} or {current_obs_dim - 12}."
             )
         self.agent = PPOAgent((self.obs_dim,), (self.action_dim,)).to(self.device)
-        self.agent.load_state_dict(checkpoint)
+        self.agent.load_state_dict(model_state_dict)
         self.agent.eval()
 
         self._history = np.repeat(self._basic_history(obs)[None, :], N_HISTORY, axis=0)
@@ -181,8 +184,11 @@ class PPOLevel2Inference(Controller):
         gate_current = self._gate_corners_body(obs, target_gate, pos, rot_t)
         next_gate = min(max(target_gate, 0) + 1, self.n_gates - 1)
         gate_next = self._gate_corners_body(obs, next_gate, pos, rot_t)
-        obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
-        obstacles_body = ((obstacles_pos - pos[None, :]) @ rot_t.T).reshape(-1)
+        if self.observation_layout == OBSERVATION_LAYOUT:
+            obstacle_features = self._obstacle_heading_xy(obs, pos, rot)
+        else:
+            obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
+            obstacle_features = ((obstacles_pos - pos[None, :]) @ rot_t.T).reshape(-1)
         target_progress = np.array(
             [self.n_gates if target_gate < 0 else target_gate], dtype=np.float32
         ) / self.n_gates
@@ -200,13 +206,13 @@ class PPOLevel2Inference(Controller):
             [
                 gate_current,
                 gate_next,
-                obstacles_body,
+                obstacle_features,
                 np.asarray(obs["gates_visited"], dtype=np.float32),
-                np.asarray(obs["obstacles_visited"], dtype=np.float32),
-                self._last_action_norm,
-                self._history.reshape(-1),
             ]
         )
+        if self.observation_layout == LEGACY_OBSERVATION_LAYOUT:
+            obs_parts.append(np.asarray(obs["obstacles_visited"], dtype=np.float32))
+        obs_parts.extend([self._last_action_norm, self._history.reshape(-1)])
         flat = np.concatenate(obs_parts).astype(np.float32)
 
         self._history = np.concatenate([self._history[1:], self._basic_history(obs)[None, :]])
@@ -226,6 +232,25 @@ class PPOLevel2Inference(Controller):
         gate_rot = self.quat_to_rotmat(gate_quat)
         corners_world = gate_pos[None, :] + GATE_CORNERS_LOCAL @ gate_rot.T
         return ((corners_world - pos[None, :]) @ rot_t.T).reshape(-1).astype(np.float32)
+
+    @staticmethod
+    def _obstacle_heading_xy(
+        obs: dict[str, NDArray[np.floating]],
+        pos: NDArray[np.floating],
+        rot: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        """Return fixed-order [forward, left, XY distance, detected] obstacle features."""
+        obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
+        relative_xy = obstacles_pos[:, :2] - pos[None, :2]
+        heading_forward = np.asarray(rot[:2, 0], dtype=np.float32)
+        heading_forward /= max(float(np.linalg.norm(heading_forward)), 1e-6)
+        heading_left = np.array([-heading_forward[1], heading_forward[0]], dtype=np.float32)
+        relative_forward = relative_xy @ heading_forward
+        relative_left = relative_xy @ heading_left
+        distance_xy = np.linalg.norm(relative_xy, axis=-1)
+        detected = np.asarray(obs["obstacles_visited"], dtype=np.float32)
+        features = np.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
+        return features.reshape(-1).astype(np.float32)
 
     @staticmethod
     def _basic_history(obs: dict[str, NDArray[np.floating]]) -> NDArray[np.float32]:
