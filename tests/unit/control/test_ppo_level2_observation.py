@@ -2,15 +2,18 @@
 
 import jax.numpy as jp
 import numpy as np
+import pytest
+import torch
 
 from lsy_drone_racing.control.ppo_level2_inference import PPOLevel2Inference
 from lsy_drone_racing.control.ppo_level2_observation import (
     LEGACY_OBSERVATION_LAYOUT,
     OBSERVATION_LAYOUT,
+    checkpoint_hidden_dim,
     make_checkpoint,
     unpack_checkpoint,
 )
-from lsy_drone_racing.control.train_CleanRL_ppo import RaceObservation
+from lsy_drone_racing.control.train_CleanRL_ppo import Agent, RaceObservation
 
 
 def test_obstacle_heading_xy_matches_training_and_inference() -> None:
@@ -60,12 +63,36 @@ def test_obstacle_heading_xy_matches_training_and_inference() -> None:
 
 def test_checkpoint_observation_layout_metadata() -> None:
     """New checkpoints declare their layout and old raw state dicts stay legacy."""
-    state_dict = {"weight": np.array([1.0], dtype=np.float32)}
+    state_dict = Agent((103,), (4,), hidden_dim=128).state_dict()
+    checkpoint = make_checkpoint(state_dict)
 
-    unpacked, layout = unpack_checkpoint(make_checkpoint(state_dict))
+    unpacked, layout = unpack_checkpoint(checkpoint)
     assert unpacked is state_dict
     assert layout == OBSERVATION_LAYOUT
+    assert checkpoint["hidden_dim"] == 128
+    assert checkpoint_hidden_dim(checkpoint, unpacked) == 128
 
     unpacked, layout = unpack_checkpoint(state_dict)
     assert unpacked is state_dict
     assert layout == LEGACY_OBSERVATION_LAYOUT
+    assert checkpoint_hidden_dim(state_dict, unpacked) == 128
+
+
+def test_checkpoint_hidden_dim_metadata_must_match_weights() -> None:
+    """Reject corrupt width metadata before constructing a mismatched network."""
+    state_dict = Agent((103,), (4,), hidden_dim=64).state_dict()
+    checkpoint = make_checkpoint(state_dict)
+    checkpoint["hidden_dim"] = 128
+
+    with pytest.raises(ValueError, match="actor weights use 64"):
+        checkpoint_hidden_dim(checkpoint, state_dict)
+
+
+def test_agent_hidden_dim_controls_both_networks() -> None:
+    """Actor and critic use the configured shared hidden width."""
+    agent = Agent((103,), (4,), hidden_dim=128)
+
+    assert agent.actor_mean[0].weight.shape == torch.Size([128, 103])
+    assert agent.actor_mean[2].weight.shape == torch.Size([128, 128])
+    assert agent.critic[0].weight.shape == torch.Size([128, 103])
+    assert agent.critic[2].weight.shape == torch.Size([128, 128])

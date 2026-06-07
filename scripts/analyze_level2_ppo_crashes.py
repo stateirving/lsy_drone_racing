@@ -22,7 +22,11 @@ from gymnasium.wrappers.jax_to_numpy import JaxToNumpy
 from scipy.spatial.transform import Rotation as R
 
 from lsy_drone_racing.control import ppo_level2_inference
-from lsy_drone_racing.control.ppo_level2_observation import OBSERVATION_LAYOUT, unpack_checkpoint
+from lsy_drone_racing.control.ppo_level2_observation import (
+    OBSERVATION_LAYOUT,
+    checkpoint_hidden_dim,
+    unpack_checkpoint,
+)
 from lsy_drone_racing.control.train_CleanRL_ppo import Agent, make_envs
 from lsy_drone_racing.utils import load_config
 
@@ -70,7 +74,10 @@ def load_agent(env: Any, checkpoint_path: Path, device: torch.device) -> Agent:
     expected_dim = int(np.prod(env.single_observation_space.shape))
     if obs_dim != expected_dim:
         raise ValueError(f"Checkpoint obs_dim={obs_dim}, environment obs_dim={expected_dim}.")
-    agent = Agent(env.single_observation_space.shape, env.single_action_space.shape).to(device)
+    hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
+    agent = Agent(
+        env.single_observation_space.shape, env.single_action_space.shape, hidden_dim=hidden_dim
+    ).to(device)
     agent.load_state_dict(model_state_dict)
     agent.eval()
     return agent

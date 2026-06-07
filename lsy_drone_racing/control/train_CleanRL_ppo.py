@@ -25,6 +25,7 @@ from torch.distributions.normal import Normal
 import wandb
 from lsy_drone_racing.control.ppo_level2_observation import (
     OBSERVATION_LAYOUT,
+    checkpoint_hidden_dim,
     make_checkpoint,
     unpack_checkpoint,
 )
@@ -84,6 +85,8 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = 0.03
     """the target KL divergence threshold"""
+    hidden_dim: int = 128
+    """shared width of the two actor and critic hidden layers"""
 
     # to be filled in runtime
     batch_size: int = 0
@@ -931,22 +934,25 @@ def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.
 class Agent(nn.Module):
     """RL Agent."""
 
-    def __init__(self, obs_shape: tuple, action_shape: tuple):
+    def __init__(self, obs_shape: tuple, action_shape: tuple, hidden_dim: int = 128):
         """Init network structures."""
         super().__init__()
+        if hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
+        self.hidden_dim = hidden_dim
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(hidden_dim, 1), std=1.0),
         )
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, torch.tensor(action_shape).prod()), std=0.01),
+            layer_init(nn.Linear(hidden_dim, torch.tensor(action_shape).prod()), std=0.01),
             nn.Tanh(),
         )
         self.actor_logstd = nn.Parameter(
@@ -1051,7 +1057,11 @@ def train_ppo(
         "only continuous action space is supported"
     )
 
-    agent = Agent(envs.single_observation_space.shape, envs.single_action_space.shape).to(device)
+    agent = Agent(
+        envs.single_observation_space.shape,
+        envs.single_action_space.shape,
+        hidden_dim=args.hidden_dim,
+    ).to(device)
     if initial_model_path is not None:
         checkpoint = torch.load(initial_model_path, map_location=device)
         model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
@@ -1059,6 +1069,12 @@ def train_ppo(
             raise ValueError(
                 f"Cannot initialize {OBSERVATION_LAYOUT} training from checkpoint layout "
                 f"{observation_layout}. Train from scratch or use a matching checkpoint."
+            )
+        initial_hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
+        if initial_hidden_dim != args.hidden_dim:
+            raise ValueError(
+                f"Cannot initialize hidden_dim={args.hidden_dim} training from a "
+                f"hidden_dim={initial_hidden_dim} checkpoint. Use a matching hidden_dim."
             )
         agent.load_state_dict(model_state_dict)
         print(f"initialized agent weights from {initial_model_path}; optimizer starts fresh")
@@ -1263,14 +1279,16 @@ def train_ppo(
         while next_checkpoint_step is not None and global_step >= next_checkpoint_step:
             checkpoint_name = f"{checkpoint_stem}_step_{next_checkpoint_step:09d}.ckpt"
             checkpoint_path = checkpoint_dir / checkpoint_name
-            torch.save(make_checkpoint(agent.state_dict()), checkpoint_path)
+            torch.save(
+                make_checkpoint(agent.state_dict(), hidden_dim=args.hidden_dim), checkpoint_path
+            )
             print(f"checkpoint saved to {checkpoint_path} at global_step={global_step}")
             next_checkpoint_step += checkpoint_interval
     train_end_time = time.time()
     print(f"Training for {global_step} steps took {train_end_time - train_start_time:.2f} seconds.")
     if model_path is not None:
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(make_checkpoint(agent.state_dict()), model_path)
+        torch.save(make_checkpoint(agent.state_dict(), hidden_dim=args.hidden_dim), model_path)
         print(f"model saved to {model_path}")
     envs.close()
 
@@ -1312,15 +1330,18 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
         "time_penalty": args.time_penalty,
     }
     eval_env = make_envs(config=args.config, num_envs=1, coefs=r_coefs)
-    agent = Agent(eval_env.single_observation_space.shape, eval_env.single_action_space.shape).to(
-        device
-    )
     checkpoint = torch.load(model_path, map_location=device)
     model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
     if observation_layout != OBSERVATION_LAYOUT:
         raise ValueError(
             f"Cannot evaluate checkpoint layout {observation_layout} with {OBSERVATION_LAYOUT} env."
         )
+    hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
+    agent = Agent(
+        eval_env.single_observation_space.shape,
+        eval_env.single_action_space.shape,
+        hidden_dim=hidden_dim,
+    ).to(device)
     agent.load_state_dict(model_state_dict)
     with torch.no_grad():
         episode_rewards = []
@@ -1427,6 +1448,7 @@ def main(
     num_minibatches: int = 8,
     ent_coef: float = 0.02,
     target_kl: float = 0.03,
+    hidden_dim: int = 128,
     cuda: bool = True,
     jax_device: str = "gpu",
     model_name: str = "ppo_level2_racing.ckpt",
@@ -1476,6 +1498,7 @@ def main(
         num_minibatches=num_minibatches,
         ent_coef=ent_coef,
         target_kl=target_kl,
+        hidden_dim=hidden_dim,
         cuda=cuda,
         jax_device=jax_device,
         n_obs=n_obs,

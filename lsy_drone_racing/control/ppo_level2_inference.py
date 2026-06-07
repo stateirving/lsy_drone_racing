@@ -16,6 +16,7 @@ from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.ppo_level2_observation import (
     LEGACY_OBSERVATION_LAYOUT,
     OBSERVATION_LAYOUT,
+    checkpoint_hidden_dim,
     unpack_checkpoint,
 )
 
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 # Previous legacy-observation checkpoints:
 # checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/..._step_080000000.ckpt
 # checkpoints/ppo_level2_cmdtilt1p5_160M/..._step_100000000.ckpt
-MODEL_NAME = "checkpoints/ppo_level2_obs2/ppo_level2_obs2_step_100000000.ckpt"
+MODEL_NAME = "checkpoints/ppo_level2_DR1/ppo_level2_DR1_step_130000000.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(
@@ -49,22 +50,27 @@ def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.
 class PPOAgent(nn.Module):
     """Policy network matching train_CleanRL_ppo.Agent."""
 
-    def __init__(self, obs_shape: tuple[int, ...], action_shape: tuple[int, ...]):
+    def __init__(
+        self, obs_shape: tuple[int, ...], action_shape: tuple[int, ...], hidden_dim: int = 128
+    ):
         """Build actor and critic modules so the training checkpoint loads unchanged."""
         super().__init__()
+        if hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
+        self.hidden_dim = hidden_dim
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(hidden_dim, 1), std=1.0),
         )
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(torch.tensor(obs_shape).prod(), hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, torch.tensor(action_shape).prod()), std=0.01),
+            layer_init(nn.Linear(hidden_dim, torch.tensor(action_shape).prod()), std=0.01),
             nn.Tanh(),
         )
         self.actor_logstd = nn.Parameter(
@@ -129,6 +135,7 @@ class PPOLevel2Inference(Controller):
             raise FileNotFoundError(f"PPO checkpoint not found: {model_path}")
         checkpoint = torch.load(model_path, map_location=self.device)
         model_state_dict, self.observation_layout = unpack_checkpoint(checkpoint)
+        self.hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
         if self.observation_layout not in (LEGACY_OBSERVATION_LAYOUT, OBSERVATION_LAYOUT):
             raise ValueError(f"Unsupported PPO observation layout: {self.observation_layout}")
         self.obs_dim = int(model_state_dict["actor_mean.0.weight"].shape[1])
@@ -138,7 +145,9 @@ class PPOLevel2Inference(Controller):
                 f"Unsupported PPO checkpoint input size {self.obs_dim}; "
                 f"expected {current_obs_dim} or {current_obs_dim - 12}."
             )
-        self.agent = PPOAgent((self.obs_dim,), (self.action_dim,)).to(self.device)
+        self.agent = PPOAgent((self.obs_dim,), (self.action_dim,), hidden_dim=self.hidden_dim).to(
+            self.device
+        )
         self.agent.load_state_dict(model_state_dict)
         self.agent.eval()
 
