@@ -27,7 +27,8 @@ if TYPE_CHECKING:
 # checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/..._step_080000000.ckpt
 # checkpoints/ppo_level2_cmdtilt1p5_160M/..._step_100000000.ckpt
 # MODEL_NAME = "checkpoints/ppo_level2_DR1/ppo_level2_DR1_step_130000000.ckpt"
-MODEL_NAME = "checkpoints/ppo_level2_DR_nn256/ppo_level2_DR_nn256_final.ckpt"
+# MODEL_NAME = "checkpoints/ppo_level2_DR_nn256/ppo_level2_DR_nn256_final.ckpt"
+MODEL_NAME = "checkpoints/ppo_level2_DR_nn256_addwroingsideback/ppo_level2_DR_nn256_addwroingsideback_step_090000000.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(
