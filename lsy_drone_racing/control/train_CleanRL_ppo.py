@@ -166,6 +166,99 @@ class NormalizeVectorActions(VectorWrapper):
         return jp.clip(actions, -1.0, 1.0) * scale + mean
 
 
+class ThrustScaleBatterySag(VectorWrapper):
+    """Apply train-only thrust calibration and battery sag to physical attitude actions."""
+
+    def __init__(
+        self,
+        env: VectorEnv,
+        config: dict | None,
+        *,
+        env_freq: int,
+        seed: int | None = None,
+    ):
+        """Initialize per-episode thrust scale and sag state."""
+        super().__init__(env)
+        config = {} if config is None else config
+        self.scale_min = float(config.get("scale_min", 1.0))
+        self.scale_max = float(config.get("scale_max", 1.0))
+        self.battery_sag_min = float(config.get("battery_sag_min", 0.0))
+        self.battery_sag_max = float(config.get("battery_sag_max", 0.0))
+        horizon_s = float(config.get("battery_sag_horizon_s", 10.0))
+        if self.scale_min <= 0.0 or self.scale_max <= 0.0:
+            raise ValueError("thrust scale_min/scale_max must be positive.")
+        if self.scale_min > self.scale_max:
+            raise ValueError("thrust scale_min must be <= scale_max.")
+        if self.battery_sag_min < 0.0 or self.battery_sag_max < 0.0:
+            raise ValueError("battery sag bounds must be non-negative.")
+        if self.battery_sag_min > self.battery_sag_max:
+            raise ValueError("battery_sag_min must be <= battery_sag_max.")
+        if horizon_s <= 0.0:
+            raise ValueError("battery_sag_horizon_s must be positive.")
+
+        self.single_action_space = env.single_action_space
+        self.action_space = env.action_space
+        self._state_shape = (self.num_envs,) + tuple(self.single_action_space.shape[:-1])
+        self._mask_shape = (self.num_envs,) + (1,) * (len(self._state_shape) - 1)
+        self._sag_horizon_steps = float(env_freq) * horizon_s
+        rng_seed = random.randrange(2**31) if seed is None or seed == -1 else int(seed)
+        self._rng_key = jax.random.PRNGKey(rng_seed)
+        self._steps = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._thrust_scale = jp.ones(self._state_shape, dtype=jp.float32)
+        self._battery_sag = jp.zeros(self._state_shape, dtype=jp.float32)
+        self._sample_episode_params(jp.ones((self.num_envs,), dtype=bool))
+
+    def reset(self, seed: int | None = None, options: dict | None = None) -> tuple[dict, dict]:
+        """Reset wrapper state and sample per-episode thrust parameters."""
+        observations, infos = self.env.reset(seed=seed, options=options)
+        if seed is not None:
+            self._rng_key = jax.random.PRNGKey(int(seed))
+        self._steps = jp.zeros((self.num_envs,), dtype=jp.int32)
+        self._sample_episode_params(jp.ones((self.num_envs,), dtype=bool))
+        return observations, infos
+
+    def step(self, actions: Array) -> tuple[dict, Array, Array, Array, dict]:
+        """Scale thrust before stepping the wrapped simulation environment."""
+        observations, rewards, terminations, truncations, infos = self.env.step(
+            self._apply_thrust_sag(actions)
+        )
+        done = jp.asarray(terminations) | jp.asarray(truncations)
+        if done.ndim > 1:
+            done = jp.any(done, axis=tuple(range(1, done.ndim)))
+        self._steps = jp.where(done, 0, self._steps + 1)
+        self._sample_episode_params(done)
+        return observations, rewards, terminations, truncations, infos
+
+    def _sample_episode_params(self, mask: Array) -> None:
+        """Sample fixed thrust parameters for newly reset vector slots."""
+        self._rng_key, scale_key, sag_key = jax.random.split(self._rng_key, 3)
+        thrust_scale = jax.random.uniform(
+            scale_key,
+            self._state_shape,
+            dtype=jp.float32,
+            minval=self.scale_min,
+            maxval=self.scale_max,
+        )
+        battery_sag = jax.random.uniform(
+            sag_key,
+            self._state_shape,
+            dtype=jp.float32,
+            minval=self.battery_sag_min,
+            maxval=self.battery_sag_max,
+        )
+        mask = jp.asarray(mask, dtype=bool).reshape(self._mask_shape)
+        self._thrust_scale = jp.where(mask, thrust_scale, self._thrust_scale)
+        self._battery_sag = jp.where(mask, battery_sag, self._battery_sag)
+
+    def _apply_thrust_sag(self, actions: Array) -> Array:
+        """Apply thrust scale minus linear battery sag to the thrust command."""
+        actions = jp.asarray(actions)
+        progress = jp.clip(self._steps.astype(jp.float32) / self._sag_horizon_steps, 0.0, 1.0)
+        progress = progress.reshape(self._mask_shape)
+        thrust_scale = jp.maximum(self._thrust_scale - self._battery_sag * progress, 0.0)
+        return actions.at[..., -1].set(actions[..., -1] * thrust_scale)
+
+
 class Level2RaceReward(VectorRewardWrapper):
     """Dense reward for direct level2 gate racing.
 
@@ -871,6 +964,15 @@ def make_envs(
     coefs = {} if coefs is None else coefs
     cfg = load_config(Path(__file__).parents[2] / "config" / config)
     cfg.sim.render = False
+    disturbances = cfg.env.get("disturbances")
+    legacy_thrust_disturbance = None
+    if disturbances is not None:
+        disturbances = dict(disturbances)
+        legacy_thrust_disturbance = disturbances.pop("thrust", None)
+    train_cfg = cfg.get("train", {})
+    thrust_disturbance = train_cfg.get("thrust") if train_cfg is not None else None
+    if thrust_disturbance is None:
+        thrust_disturbance = legacy_thrust_disturbance
     if cfg.env.control_mode != "attitude":
         raise ValueError("Direct level2 PPO currently expects env.control_mode = 'attitude'.")
     env = gym.make_vec(
@@ -881,11 +983,18 @@ def make_envs(
         sensor_range=cfg.env.sensor_range,
         control_mode=cfg.env.control_mode,
         track=cfg.env.track,
-        disturbances=cfg.env.get("disturbances"),
+        disturbances=disturbances,
         randomizations=cfg.env.get("randomizations"),
         seed=cfg.env.seed,
         device=jax_device,
     )
+    if thrust_disturbance is not None:
+        env = ThrustScaleBatterySag(
+            env,
+            thrust_disturbance,
+            env_freq=cfg.env.freq,
+            seed=cfg.env.seed,
+        )
 
     env = NormalizeVectorActions(env)
     env = Level2RaceReward(

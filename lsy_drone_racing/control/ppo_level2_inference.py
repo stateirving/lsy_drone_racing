@@ -22,13 +22,12 @@ from lsy_drone_racing.control.ppo_level2_observation import (
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
-
-# Previous legacy-observation checkpoints:
-# checkpoints/ppo_level2_cmdtilt_tilt30_rpy2_excess20/..._step_080000000.ckpt
-# checkpoints/ppo_level2_cmdtilt1p5_160M/..._step_100000000.ckpt
-# MODEL_NAME = "checkpoints/ppo_level2_DR1/ppo_level2_DR1_step_130000000.ckpt"
+# most smooth without DR
+# MODEL_NAME = "checkpoints/ppo_level2_cmdtilt1p5_160M/ppo_level2_cmdtilt1p5_160M_step_100000000.ckpt"
+# most smooth with DR(mass,inertia,dynamic,action)
 # MODEL_NAME = "checkpoints/ppo_level2_DR_nn256/ppo_level2_DR_nn256_final.ckpt"
-MODEL_NAME = "checkpoints/ppo_level2_DR_nn256_addwroingsideback/ppo_level2_DR_nn256_addwroingsideback_step_090000000.ckpt"
+# DR(mass,inertia,dynamic,action,trust scale,battery sag)
+MODEL_NAME = "checkpoints/ppo_level2_DR_nn256_thrustsag/ppo_level2_DR_nn256_thrustsag_final.ckpt"
 N_HISTORY = 2
 HISTORY_DIM = 13
 GATE_CORNERS_LOCAL = np.array(

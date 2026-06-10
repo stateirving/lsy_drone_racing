@@ -1,11 +1,12 @@
 # Level 2 domain-randomized training config
 #
-# This keeps the level2 nominal track layout fixed, but increases deploy-oriented robustness:
+# This keeps the level2 nominal track layout fixed, but increases deploy-oriented robustness.
+# Semantic differences from config/level2.toml are marked inline with "DR delta":
 # - stronger horizontal force disturbance for airflow-like effects
-# - reduced vertical high-frequency force noise to avoid random gravity/thrust jumps
 # - slightly larger action noise
-# - mass randomization biased heavier to approximate reduced thrust margin / low battery
-# - diagonal-only inertia randomization
+# - per-episode thrust scale and short-horizon battery sag for cf21B_500
+# - wider mass randomization
+# - wider diagonal inertia randomization
 
 [controller]
 file = "ppo_level2_inference.py"
@@ -19,6 +20,15 @@ real_track_objects = true
 id = 52
 channel = 80
 drone_model = "cf21B_500"
+
+[train.thrust]
+# Train-only DR: cf21B_500-like total thrust calibration and battery sag.
+# Effective thrust multiplier starts in [0.94, 1.04] and can drop by up to 5% over 8s.
+scale_min = 0.94
+scale_max = 1.04
+battery_sag_min = 0.0
+battery_sag_max = 0.05
+battery_sag_horizon_s = 8.0
 
 [sim]
 physics = "first_principles"
@@ -78,11 +88,13 @@ pos_limit_high = [2.5, 1.5, 2.0]
 
 [env.disturbances.action]
 fn = "normal"
-scale = 0.003
+# DR delta vs level2.toml: action noise scale 0.001 -> 0.006.
+scale = 0.006
 
 [env.disturbances.dynamics]
 fn = "uniform"
 [env.disturbances.dynamics.kwargs]
+# DR delta vs level2.toml: x/y disturbance range +/-0.1 -> +/-0.15; z stays +/-0.1.
 minval = [-0.15, -0.15, -0.1]
 maxval = [0.15, 0.15, 0.1]
 
@@ -101,12 +113,14 @@ maxval = [0.1, 0.1, 0.1]
 [env.randomizations.drone_mass]
 fn = "uniform"
 [env.randomizations.drone_mass.kwargs]
+# DR delta vs level2.toml: mass randomization +/-0.005 -> +/-0.01.
 minval = -0.01
 maxval = 0.01
 
 [env.randomizations.drone_inertia]
 fn = "uniform"
 [env.randomizations.drone_inertia.kwargs]
+# DR delta vs level2.toml: inertia randomization +/-1e-6 -> +/-2e-6.
 minval = [-0.000002, -0.000002, -0.000002]
 maxval = [0.000002, 0.000002, 0.000002]
 
