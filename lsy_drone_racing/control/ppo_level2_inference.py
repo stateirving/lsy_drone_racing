@@ -35,8 +35,14 @@ if TYPE_CHECKING:
 # DR with 20% thrust-to-weight style randomization; best checkpoint was 110M, fast but aggressive.
 # MODEL_NAME = "checkpoints/ppo_level2_DR_nn256_th2w20per/ppo_level2_DR_nn256_th2w20per_step_110000000.ckpt"
 
-# Next training run: DR + thrust/sag + action latency/response lag + observation latency/noise.
-MODEL_NAME = "checkpoints/ppo_level2_DR_nn256_latencyobs/ppo_level2_DR_nn256_latencyobs_step_090000000.ckpt"
+# DR + thrust/sag + action latency/response lag + observation latency/noise.
+# Best balanced new-DR real-deploy candidate: level2 seeds 1-100 success 80%,
+# smoother/safer than onemoretime (actual tilt p95 ~=33.5 deg, worst ~=34.1 deg).
+MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever/level2_DR_latencyobs_middlemanuever_final.ckpt"
+
+# Same reward as middlemanuever, trained longer; level2 success 81% but more aggressive
+# (actual tilt p95 ~=39.7 deg, worst ~=41.8 deg). Keep as speed/success backup.
+# MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever_onemoretime/level2_DR_latencyobs_middlemanuever_onemoretime_final.ckpt"
 
 N_HISTORY = 2
 HISTORY_DIM = 13
