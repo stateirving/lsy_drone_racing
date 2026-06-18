@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "checkpoints/level3_DR_initial/level3_DR_initial_step_190000000.ckpt"
+MODEL_NAME = "checkpoints/level3_newobs/level3_newobs_step_010000000.ckpt"
 
 
 N_HISTORY = 2
@@ -314,7 +314,7 @@ class PPOLevel2Inference(Controller):
         """Return fixed-order [forward, left, XY distance, detected] obstacle features."""
         obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
         relative_xy = obstacles_pos[:, :2] - pos[None, :2]
-        heading_forward = np.asarray(rot[:2, 0], dtype=np.float32)
+        heading_forward = np.array(rot[:2, 0], dtype=np.float32, copy=True)
         heading_forward /= max(float(np.linalg.norm(heading_forward)), 1e-6)
         heading_left = np.array([-heading_forward[1], heading_forward[0]], dtype=np.float32)
         relative_forward = relative_xy @ heading_forward

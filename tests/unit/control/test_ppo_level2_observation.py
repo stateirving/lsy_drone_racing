@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from lsy_drone_racing.control.ppo_level2_inference import PPOLevel2Inference
+from lsy_drone_racing.control.ppo_level3_inference import PPOLevel2Inference as PPOLevel3Inference
 from lsy_drone_racing.control.ppo_level2_observation import (
     LEGACY_OBSERVATION_LAYOUT,
     OBSERVATION_LAYOUT,
@@ -59,6 +60,23 @@ def test_obstacle_heading_xy_matches_training_and_inference() -> None:
     )
     np.testing.assert_allclose(inference_features, expected, atol=1e-6)
     np.testing.assert_allclose(np.asarray(training_features[0]), expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("controller_cls", [PPOLevel2Inference, PPOLevel3Inference])
+def test_inference_obstacle_heading_does_not_mutate_rotmat(controller_cls) -> None:
+    """Obstacle heading features must not corrupt the rotmat later packed into obs."""
+    pos = np.zeros(3, dtype=np.float32)
+    quat = np.array([0.0, np.sin(np.pi / 8), 0.0, np.cos(np.pi / 8)], dtype=np.float32)
+    rot = controller_cls.quat_to_rotmat(quat)
+    rot_before = rot.copy()
+    obs = {
+        "obstacles_pos": np.array([[1.0, 0.0, 1.55]], dtype=np.float32),
+        "obstacles_visited": np.array([True]),
+    }
+
+    controller_cls._obstacle_heading_xy(obs, pos, rot)
+
+    np.testing.assert_allclose(rot, rot_before, atol=0.0)
 
 
 def test_checkpoint_observation_layout_metadata() -> None:
