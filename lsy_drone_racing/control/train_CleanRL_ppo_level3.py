@@ -23,13 +23,16 @@ from torch import Tensor
 from torch.distributions.normal import Normal
 
 import wandb
-from lsy_drone_racing.control.ppo_level2_observation import (
-    OBSERVATION_LAYOUT,
+from lsy_drone_racing.control.ppo_level3_observation import (
+    ALL_GATES_OBSERVATION_LAYOUT,
     checkpoint_hidden_dim,
     make_checkpoint,
     unpack_checkpoint,
 )
 from lsy_drone_racing.utils import load_config
+
+
+LEVEL3_OBSERVATION_LAYOUT = ALL_GATES_OBSERVATION_LAYOUT
 
 
 # region Arguments
@@ -1022,7 +1025,7 @@ class RaceObservation(VectorObservationWrapper):
         ],
         dtype=jp.float32,
     )
-    HISTORY_DIM = 13
+    HISTORY_DIM = 7
 
     def __init__(self, env: VectorEnv, n_history: int = 2, debug_obs: bool = False):
         """Initialize observation vector layout."""
@@ -1081,12 +1084,10 @@ class RaceObservation(VectorObservationWrapper):
         add("vel_body", 3)
         add("ang_vel", 3)
         add("rotmat", 9)
-        add("target_progress", 1)
-        add("gate_prev_corners_body", 12)
-        add("gate_current_corners_body", 12)
-        add("gate_next_corners_body", 12)
+        add("all_gate_corners_body", 12 * self.n_gates)
+        add("target_gate_onehot", self.n_gates)
+        add("gate_known_flags", self.n_gates)
         add("obstacles_heading_xy", 4 * self.n_obstacles)
-        add("gates_visited", self.n_gates)
         add("last_action", self.action_dim)
         add("history", self.n_history * self.HISTORY_DIM)
         return layout
@@ -1101,39 +1102,21 @@ class RaceObservation(VectorObservationWrapper):
         rot = self.quat_to_rotmat(quat)
         rot_t = jp.swapaxes(rot, -1, -2)
         vel_body = jp.einsum("nij,nj->ni", rot_t, vel)
-        active_target_gate = jp.where(
-            observations["target_gate"] < 0,
-            self.n_gates - 1,
-            observations["target_gate"],
-        )
-        prev_gate = jp.maximum(active_target_gate - 1, 0)
-        gate_prev = self._gate_corners_body(observations, prev_gate, pos, rot_t)
-        gate_prev = jp.where(
-            (active_target_gate > 0)[:, None],
-            gate_prev,
-            jp.zeros_like(gate_prev),
-        )
-        gate_current = self._gate_corners_body(
-            observations, observations["target_gate"], pos, rot_t
-        )
-        next_gate = jp.minimum(jp.maximum(observations["target_gate"], 0) + 1, self.n_gates - 1)
-        gate_next = self._gate_corners_body(observations, next_gate, pos, rot_t)
+        all_gate_corners = self._all_gate_corners_body(observations, pos, rot_t)
+        target_gate_onehot = (
+            jp.arange(self.n_gates)[None, :] == observations["target_gate"][:, None]
+        ).astype(jp.float32)
+        gate_known_flags = observations["gates_visited"].astype(jp.float32)
         obstacles_heading_xy = self._obstacle_heading_xy(observations, pos, rot)
-        target_progress = (
-            jp.where(observations["target_gate"] < 0, self.n_gates, observations["target_gate"])
-            / self.n_gates
-        )[:, None]
         parts = [
             pos[:, 2:3],
             vel_body,
             ang_vel,
             rot.reshape(pos.shape[0], -1),
-            target_progress.astype(jp.float32),
-            gate_prev,
-            gate_current,
-            gate_next,
+            all_gate_corners,
+            target_gate_onehot,
+            gate_known_flags,
             obstacles_heading_xy,
-            observations["gates_visited"].astype(jp.float32),
             last_action,
             history.reshape(pos.shape[0], -1),
         ]
@@ -1167,13 +1150,27 @@ class RaceObservation(VectorObservationWrapper):
         corners_body = jp.einsum("nij,nkj->nki", rot_t, corners_world - pos[:, None, :])
         return corners_body.reshape(pos.shape[0], -1)
 
+    def _all_gate_corners_body(
+        self, observations: dict[str, Array], pos: Array, rot_t: Array
+    ) -> Array:
+        gate_rot = self.quat_to_rotmat(observations["gates_quat"])
+        corners_world = observations["gates_pos"][:, :, None, :] + jp.einsum(
+            "ngij,kj->ngki", gate_rot, self.GATE_CORNERS_LOCAL
+        )
+        corners_body = jp.einsum("nij,ngkj->ngki", rot_t, corners_world - pos[:, None, None, :])
+        return corners_body.reshape(pos.shape[0], -1)
+
     @staticmethod
     def _basic_history(observations: dict[str, Array]) -> Array:
+        quat = observations["quat"]
+        vel = observations["vel"]
+        rot = RaceObservation.quat_to_rotmat(quat)
+        rot_t = jp.swapaxes(rot, -1, -2)
+        vel_body = jp.einsum("nij,nj->ni", rot_t, vel)
         return jp.concatenate(
             [
-                observations["pos"],
-                observations["quat"],
-                observations["vel"],
+                observations["pos"][:, 2:3],
+                vel_body,
                 observations["ang_vel"],
             ],
             axis=-1,
@@ -1280,7 +1277,7 @@ def setup_wandb(args: Args) -> None:
         wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, config=vars(args))
     else:
         wandb.config.update(vars(args), allow_val_change=True)
-    wandb.config.update({"observation_layout": OBSERVATION_LAYOUT}, allow_val_change=True)
+    wandb.config.update({"observation_layout": LEVEL3_OBSERVATION_LAYOUT}, allow_val_change=True)
 
     wandb.define_metric("global_step")
     for metric_pattern in (
@@ -1536,9 +1533,9 @@ def train_ppo(
     if initial_model_path is not None:
         checkpoint = torch.load(initial_model_path, map_location=device)
         model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
-        if observation_layout != OBSERVATION_LAYOUT:
+        if observation_layout != LEVEL3_OBSERVATION_LAYOUT:
             raise ValueError(
-                f"Cannot initialize {OBSERVATION_LAYOUT} training from checkpoint layout "
+                f"Cannot initialize {LEVEL3_OBSERVATION_LAYOUT} training from checkpoint layout "
                 f"{observation_layout}. Train from scratch or use a matching checkpoint."
             )
         initial_hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
@@ -1751,7 +1748,12 @@ def train_ppo(
             checkpoint_name = f"{checkpoint_stem}_step_{next_checkpoint_step:09d}.ckpt"
             checkpoint_path = checkpoint_dir / checkpoint_name
             torch.save(
-                make_checkpoint(agent.state_dict(), hidden_dim=args.hidden_dim), checkpoint_path
+                make_checkpoint(
+                    agent.state_dict(),
+                    hidden_dim=args.hidden_dim,
+                    observation_layout=LEVEL3_OBSERVATION_LAYOUT,
+                ),
+                checkpoint_path,
             )
             print(f"checkpoint saved to {checkpoint_path} at global_step={global_step}")
             next_checkpoint_step += checkpoint_interval
@@ -1759,7 +1761,14 @@ def train_ppo(
     print(f"Training for {global_step} steps took {train_end_time - train_start_time:.2f} seconds.")
     if model_path is not None:
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(make_checkpoint(agent.state_dict(), hidden_dim=args.hidden_dim), model_path)
+        torch.save(
+            make_checkpoint(
+                agent.state_dict(),
+                hidden_dim=args.hidden_dim,
+                observation_layout=LEVEL3_OBSERVATION_LAYOUT,
+            ),
+            model_path,
+        )
         print(f"model saved to {model_path}")
     envs.close()
 
@@ -1803,9 +1812,10 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
     eval_env = make_envs(config=args.config, num_envs=1, coefs=r_coefs)
     checkpoint = torch.load(model_path, map_location=device)
     model_state_dict, observation_layout = unpack_checkpoint(checkpoint)
-    if observation_layout != OBSERVATION_LAYOUT:
+    if observation_layout != LEVEL3_OBSERVATION_LAYOUT:
         raise ValueError(
-            f"Cannot evaluate checkpoint layout {observation_layout} with {OBSERVATION_LAYOUT} env."
+            f"Cannot evaluate checkpoint layout {observation_layout} "
+            f"with {LEVEL3_OBSERVATION_LAYOUT} env."
         )
     hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
     agent = Agent(

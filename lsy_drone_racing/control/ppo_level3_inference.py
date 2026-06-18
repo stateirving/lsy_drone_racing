@@ -13,9 +13,12 @@ from torch import Tensor
 from torch.distributions.normal import Normal
 
 from lsy_drone_racing.control import Controller
-from lsy_drone_racing.control.ppo_level2_observation import (
+from lsy_drone_racing.control.ppo_level3_observation import (
+    ALL_GATES_OBSERVATION_LAYOUTS,
     LEGACY_OBSERVATION_LAYOUT,
-    OBSERVATION_LAYOUT,
+    LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES,
+    TARGET_PROGRESS_OBSERVATION_LAYOUTS,
+    WORLD_HISTORY_OBSERVATION_LAYOUT,
     checkpoint_hidden_dim,
     unpack_checkpoint,
 )
@@ -24,11 +27,17 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "checkpoints/level3_DR_initial/level3_DR_initial_step_040000000.ckpt"
+MODEL_NAME = "checkpoints/level3_DR_initial/level3_DR_initial_step_190000000.ckpt"
 
 
 N_HISTORY = 2
-HISTORY_DIM = 13
+WORLD_HISTORY_DIM = 13
+LOCAL_HISTORY_DIM = 7
+HISTORY_DIM_BY_LAYOUT = {
+    LEGACY_OBSERVATION_LAYOUT: WORLD_HISTORY_DIM,
+    WORLD_HISTORY_OBSERVATION_LAYOUT: WORLD_HISTORY_DIM,
+    **{layout: LOCAL_HISTORY_DIM for layout in LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES},
+}
 GATE_CORNERS_LOCAL = np.array(
     [
         [0.0, -0.2, 0.2],
@@ -114,19 +123,14 @@ class PPOLevel2Inference(Controller):
         self.n_gates = int(np.asarray(obs["gates_pos"]).shape[0])
         self.n_obstacles = int(np.asarray(obs["obstacles_pos"]).shape[0])
         self.action_dim = 4
-        current_obs_dim = (
+        common_obs_dim = (
             1
             + 3
             + 3
             + 9
-            + 1
-            + 12
-            + 12
-            + 12
             + 4 * self.n_obstacles
             + self.n_gates
             + self.action_dim
-            + N_HISTORY * HISTORY_DIM
         )
 
         self.device = torch.device("cpu")
@@ -136,14 +140,38 @@ class PPOLevel2Inference(Controller):
         checkpoint = torch.load(model_path, map_location=self.device)
         model_state_dict, self.observation_layout = unpack_checkpoint(checkpoint)
         self.hidden_dim = checkpoint_hidden_dim(checkpoint, model_state_dict)
-        if self.observation_layout not in (LEGACY_OBSERVATION_LAYOUT, OBSERVATION_LAYOUT):
+        if self.observation_layout not in HISTORY_DIM_BY_LAYOUT:
             raise ValueError(f"Unsupported PPO observation layout: {self.observation_layout}")
+        self.history_dim = HISTORY_DIM_BY_LAYOUT[self.observation_layout]
+        self._include_target_progress = (
+            self.observation_layout in TARGET_PROGRESS_OBSERVATION_LAYOUTS
+        )
+        self._use_all_gates = self.observation_layout in ALL_GATES_OBSERVATION_LAYOUTS
+        if self._use_all_gates:
+            current_obs_dim = (
+                common_obs_dim
+                + 12 * self.n_gates
+                + self.n_gates
+                + N_HISTORY * self.history_dim
+            )
+        else:
+            current_obs_dim = (
+                common_obs_dim
+                + 36
+                + int(self._include_target_progress)
+                + N_HISTORY * self.history_dim
+            )
         self.obs_dim = int(model_state_dict["actor_mean.0.weight"].shape[1])
-        self._include_prev_gate = self.obs_dim == current_obs_dim
-        if self.obs_dim not in (current_obs_dim, current_obs_dim - 12):
+        self._include_prev_gate = (not self._use_all_gates) and self.obs_dim == current_obs_dim
+        supported_obs_dims = (current_obs_dim,) if self._use_all_gates else (
+            current_obs_dim,
+            current_obs_dim - 12,
+        )
+        if self.obs_dim not in supported_obs_dims:
             raise ValueError(
                 f"Unsupported PPO checkpoint input size {self.obs_dim}; "
-                f"expected {current_obs_dim} or {current_obs_dim - 12}."
+                f"expected {supported_obs_dims} "
+                f"for layout {self.observation_layout}."
             )
         self.agent = PPOAgent((self.obs_dim,), (self.action_dim,), hidden_dim=self.hidden_dim).to(
             self.device
@@ -193,22 +221,42 @@ class PPOLevel2Inference(Controller):
         gate_current = self._gate_corners_body(obs, target_gate, pos, rot_t)
         next_gate = min(max(target_gate, 0) + 1, self.n_gates - 1)
         gate_next = self._gate_corners_body(obs, next_gate, pos, rot_t)
-        if self.observation_layout == OBSERVATION_LAYOUT:
+        if self.observation_layout != LEGACY_OBSERVATION_LAYOUT:
             obstacle_features = self._obstacle_heading_xy(obs, pos, rot)
         else:
             obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
             obstacle_features = ((obstacles_pos - pos[None, :]) @ rot_t.T).reshape(-1)
-        target_progress = np.array(
-            [self.n_gates if target_gate < 0 else target_gate], dtype=np.float32
-        ) / self.n_gates
-
         obs_parts = [
             pos[2:3],
             vel_body,
             ang_vel,
             rot.reshape(-1),
-            target_progress,
         ]
+        if self._use_all_gates:
+            target_gate_onehot = np.zeros(self.n_gates, dtype=np.float32)
+            if 0 <= target_gate < self.n_gates:
+                target_gate_onehot[target_gate] = 1.0
+            obs_parts.extend(
+                [
+                    self._all_gate_corners_body(obs, pos, rot_t),
+                    target_gate_onehot,
+                    np.asarray(obs["gates_visited"], dtype=np.float32),
+                    obstacle_features,
+                    self._last_action_norm,
+                    self._history.reshape(-1),
+                ]
+            )
+            flat = np.concatenate(obs_parts).astype(np.float32)
+            self._history = np.concatenate(
+                [self._history[1:], self._basic_history(obs)[None, :]]
+            )
+            return flat
+
+        if self._include_target_progress:
+            target_progress = np.array(
+                [self.n_gates if target_gate < 0 else target_gate], dtype=np.float32
+            ) / self.n_gates
+            obs_parts.append(target_progress)
         if self._include_prev_gate:
             obs_parts.append(gate_prev)
         obs_parts.extend(
@@ -242,6 +290,21 @@ class PPOLevel2Inference(Controller):
         corners_world = gate_pos[None, :] + GATE_CORNERS_LOCAL @ gate_rot.T
         return ((corners_world - pos[None, :]) @ rot_t.T).reshape(-1).astype(np.float32)
 
+    def _all_gate_corners_body(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        pos: NDArray[np.floating],
+        rot_t: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        gates_pos = np.asarray(obs["gates_pos"], dtype=np.float32)
+        gates_quat = np.asarray(obs["gates_quat"], dtype=np.float32)
+        gate_rot = np.stack([self.quat_to_rotmat(quat) for quat in gates_quat], axis=0)
+        corners_world = gates_pos[:, None, :] + np.einsum(
+            "gij,kj->gki", gate_rot, GATE_CORNERS_LOCAL
+        )
+        corners_body = np.einsum("ij,gkj->gki", rot_t, corners_world - pos[None, None, :])
+        return corners_body.reshape(-1).astype(np.float32)
+
     @staticmethod
     def _obstacle_heading_xy(
         obs: dict[str, NDArray[np.floating]],
@@ -261,9 +324,17 @@ class PPOLevel2Inference(Controller):
         features = np.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
         return features.reshape(-1).astype(np.float32)
 
-    @staticmethod
-    def _basic_history(obs: dict[str, NDArray[np.floating]]) -> NDArray[np.float32]:
-        """Return [pos, quat, vel, ang_vel]."""
+    def _basic_history(self, obs: dict[str, NDArray[np.floating]]) -> NDArray[np.float32]:
+        """Return the short state history expected by the loaded checkpoint layout."""
+        if self.history_dim == LOCAL_HISTORY_DIM:
+            pos = np.asarray(obs["pos"], dtype=np.float32)
+            quat = np.asarray(obs["quat"], dtype=np.float32)
+            vel = np.asarray(obs["vel"], dtype=np.float32)
+            ang_vel = np.asarray(obs["ang_vel"], dtype=np.float32)
+            rot = self.quat_to_rotmat(quat)
+            vel_body = rot.T @ vel
+            return np.concatenate([pos[2:3], vel_body, ang_vel]).astype(np.float32)
+
         return np.concatenate(
             [
                 np.asarray(obs["pos"], dtype=np.float32),
