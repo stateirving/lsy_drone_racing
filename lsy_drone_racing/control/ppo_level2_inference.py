@@ -30,9 +30,10 @@ if TYPE_CHECKING:
 # MODEL_NAME = "checkpoints/ppo_level2_DR_nn256/ppo_level2_DR_nn256_final.ckpt"
 
 # DR + thrust/sag + action latency/response lag + observation latency/noise.
-# Best balanced real-deploy candidate: level2 seeds 1-100 success 80%,
-# smoother/safer than the basic DR model.
-MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever/level2_DR_latencyobs_middlemanuever_final.ckpt"
+# Safer balanced backup: level2 seeds 1-100 success 80%, smoother than onemoretime.
+# MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever/level2_DR_latencyobs_middlemanuever_final.ckpt"
+# Current DR benchmark: slightly higher success than middlemanuever, but more aggressive.
+MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever_onemoretime/level2_DR_latencyobs_middlemanuever_onemoretime_final.ckpt"
 
 N_HISTORY = 2
 HISTORY_DIM = 13

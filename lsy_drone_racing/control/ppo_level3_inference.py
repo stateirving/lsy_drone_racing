@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "checkpoints/level3_localobs_relax/level3_localobs_relax_final.ckpt"
+MODEL_NAME = "checkpoints/level3_localobs_safer_finetune_from_final_highcrashpenalty/level3_localobs_safer_finetune_from_final_highcrashpenalty_final.ckpt"
 
 
 N_HISTORY = 2
