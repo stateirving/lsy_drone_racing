@@ -32,7 +32,6 @@ TRAINING_REWARD_COEFS = {
     "gate_axis_coef": 12.0,
     "near_gate_coef": 0.0,
     "gate_bonus": 80.0,
-    "gate_plane_bonus": 0.0,
     "gate_back_bonus": 8.0,
     "finish_bonus": 160.0,
     "missed_gate_penalty": 8.0,

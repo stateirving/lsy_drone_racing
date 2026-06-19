@@ -16,6 +16,7 @@ from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.ppo_level3_observation import (
     ALL_GATES_OBSERVATION_LAYOUTS,
     LEGACY_OBSERVATION_LAYOUT,
+    LOCAL_OBSTACLE_OBSERVATION_LAYOUTS,
     LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES,
     TARGET_PROGRESS_OBSERVATION_LAYOUTS,
     WORLD_HISTORY_OBSERVATION_LAYOUT,
@@ -27,12 +28,13 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "checkpoints/level3_newobs/level3_newobs_step_010000000.ckpt"
+MODEL_NAME = "checkpoints/level3_localobs_relax/level3_localobs_relax_final.ckpt"
 
 
 N_HISTORY = 2
 WORLD_HISTORY_DIM = 13
 LOCAL_HISTORY_DIM = 7
+N_LOCAL_OBSTACLES = 2
 HISTORY_DIM_BY_LAYOUT = {
     LEGACY_OBSERVATION_LAYOUT: WORLD_HISTORY_DIM,
     WORLD_HISTORY_OBSERVATION_LAYOUT: WORLD_HISTORY_DIM,
@@ -123,15 +125,8 @@ class PPOLevel2Inference(Controller):
         self.n_gates = int(np.asarray(obs["gates_pos"]).shape[0])
         self.n_obstacles = int(np.asarray(obs["obstacles_pos"]).shape[0])
         self.action_dim = 4
-        common_obs_dim = (
-            1
-            + 3
-            + 3
-            + 9
-            + 4 * self.n_obstacles
-            + self.n_gates
-            + self.action_dim
-        )
+        self.n_local_obstacles = min(N_LOCAL_OBSTACLES, self.n_obstacles)
+        base_obs_dim = 1 + 3 + 3 + 9
 
         self.device = torch.device("cpu")
         model_path = Path(__file__).parent / MODEL_NAME
@@ -147,23 +142,49 @@ class PPOLevel2Inference(Controller):
             self.observation_layout in TARGET_PROGRESS_OBSERVATION_LAYOUTS
         )
         self._use_all_gates = self.observation_layout in ALL_GATES_OBSERVATION_LAYOUTS
+        self._use_local_obstacles = (
+            self.observation_layout in LOCAL_OBSTACLE_OBSERVATION_LAYOUTS
+        )
         if self._use_all_gates:
             current_obs_dim = (
-                common_obs_dim
+                base_obs_dim
                 + 12 * self.n_gates
                 + self.n_gates
+                + self.n_gates
+                + 4 * self.n_obstacles
+                + self.action_dim
+                + N_HISTORY * self.history_dim
+            )
+        elif self._use_local_obstacles:
+            current_obs_dim = (
+                base_obs_dim
+                + 12
+                + 1
+                + 12
+                + 1
+                + 4 * self.n_local_obstacles
+                + self.action_dim
                 + N_HISTORY * self.history_dim
             )
         else:
             current_obs_dim = (
-                common_obs_dim
+                base_obs_dim
                 + 36
                 + int(self._include_target_progress)
+                + 4 * self.n_obstacles
+                + self.n_gates
+                + self.action_dim
                 + N_HISTORY * self.history_dim
             )
         self.obs_dim = int(model_state_dict["actor_mean.0.weight"].shape[1])
-        self._include_prev_gate = (not self._use_all_gates) and self.obs_dim == current_obs_dim
-        supported_obs_dims = (current_obs_dim,) if self._use_all_gates else (
+        self._include_prev_gate = (
+            not self._use_all_gates
+            and not self._use_local_obstacles
+            and self.obs_dim == current_obs_dim
+        )
+        supported_obs_dims = (current_obs_dim,) if (
+            self._use_all_gates or self._use_local_obstacles
+        ) else (
             current_obs_dim,
             current_obs_dim - 12,
         )
@@ -252,6 +273,25 @@ class PPOLevel2Inference(Controller):
             )
             return flat
 
+        if self._use_local_obstacles:
+            nearest_other_gate = self._nearest_other_gate_idx(obs, pos, active_target_gate)
+            obs_parts.extend(
+                [
+                    gate_current,
+                    self._gate_known_flag(obs, active_target_gate),
+                    self._gate_corners_body(obs, nearest_other_gate, pos, rot_t),
+                    self._gate_known_flag(obs, nearest_other_gate),
+                    self._nearest_obstacles_heading_xy(obs, pos, rot),
+                    self._last_action_norm,
+                    self._history.reshape(-1),
+                ]
+            )
+            flat = np.concatenate(obs_parts).astype(np.float32)
+            self._history = np.concatenate(
+                [self._history[1:], self._basic_history(obs)[None, :]]
+            )
+            return flat
+
         if self._include_target_progress:
             target_progress = np.array(
                 [self.n_gates if target_gate < 0 else target_gate], dtype=np.float32
@@ -305,6 +345,25 @@ class PPOLevel2Inference(Controller):
         corners_body = np.einsum("ij,gkj->gki", rot_t, corners_world - pos[None, None, :])
         return corners_body.reshape(-1).astype(np.float32)
 
+    def _nearest_other_gate_idx(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        pos: NDArray[np.floating],
+        active_target_gate: int,
+    ) -> int:
+        """Return the closest non-target gate index in XY."""
+        gates_pos = np.asarray(obs["gates_pos"], dtype=np.float32)
+        distance_xy = np.linalg.norm(gates_pos[:, :2] - pos[None, :2], axis=-1)
+        distance_xy[int(active_target_gate) % self.n_gates] = np.inf
+        return int(np.argmin(distance_xy))
+
+    def _gate_known_flag(
+        self, obs: dict[str, NDArray[np.floating]], gate_idx: int
+    ) -> NDArray[np.float32]:
+        """Return the selected gate known/visited flag."""
+        gates_visited = np.asarray(obs["gates_visited"], dtype=np.float32)
+        return np.array([gates_visited[int(gate_idx) % self.n_gates]], dtype=np.float32)
+
     @staticmethod
     def _obstacle_heading_xy(
         obs: dict[str, NDArray[np.floating]],
@@ -323,6 +382,26 @@ class PPOLevel2Inference(Controller):
         detected = np.asarray(obs["obstacles_visited"], dtype=np.float32)
         features = np.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
         return features.reshape(-1).astype(np.float32)
+
+    def _nearest_obstacles_heading_xy(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        pos: NDArray[np.floating],
+        rot: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        """Return nearest obstacle [forward, left, XY distance, detected] features."""
+        obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
+        relative_xy = obstacles_pos[:, :2] - pos[None, :2]
+        heading_forward = np.array(rot[:2, 0], dtype=np.float32, copy=True)
+        heading_forward /= max(float(np.linalg.norm(heading_forward)), 1e-6)
+        heading_left = np.array([-heading_forward[1], heading_forward[0]], dtype=np.float32)
+        relative_forward = relative_xy @ heading_forward
+        relative_left = relative_xy @ heading_left
+        distance_xy = np.linalg.norm(relative_xy, axis=-1)
+        detected = np.asarray(obs["obstacles_visited"], dtype=np.float32)
+        features = np.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
+        order = np.argsort(distance_xy)[: self.n_local_obstacles]
+        return features[order].reshape(-1).astype(np.float32)
 
     def _basic_history(self, obs: dict[str, NDArray[np.floating]]) -> NDArray[np.float32]:
         """Return the short state history expected by the loaded checkpoint layout."""

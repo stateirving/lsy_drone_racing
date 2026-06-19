@@ -24,7 +24,7 @@ from torch.distributions.normal import Normal
 
 import wandb
 from lsy_drone_racing.control.ppo_level3_observation import (
-    ALL_GATES_OBSERVATION_LAYOUT,
+    LOCAL_OBSTACLE_OBSERVATION_LAYOUT,
     checkpoint_hidden_dim,
     make_checkpoint,
     unpack_checkpoint,
@@ -32,7 +32,7 @@ from lsy_drone_racing.control.ppo_level3_observation import (
 from lsy_drone_racing.utils import load_config
 
 
-LEVEL3_OBSERVATION_LAYOUT = ALL_GATES_OBSERVATION_LAYOUT
+LEVEL3_OBSERVATION_LAYOUT = LOCAL_OBSTACLE_OBSERVATION_LAYOUT
 
 
 # region Arguments
@@ -112,7 +112,6 @@ class Args:
     gate_axis_coef: float = 8.0
     gate_stage_coef: float = 5.0
     gate_front_bonus: float = 4.0
-    gate_plane_bonus: float = 8.0
     gate_back_bonus: float = 4.0
     gate_stage_offset: float = 0.35
     gate_stage_radius: float = 0.24
@@ -450,7 +449,6 @@ class Level2RaceReward(VectorRewardWrapper):
         gate_axis_coef: float = 8.0,
         gate_stage_coef: float = 5.0,
         gate_front_bonus: float = 4.0,
-        gate_plane_bonus: float = 8.0,
         gate_back_bonus: float = 4.0,
         gate_stage_offset: float = 0.35,
         gate_stage_radius: float = 0.24,
@@ -480,7 +478,6 @@ class Level2RaceReward(VectorRewardWrapper):
         self.gate_axis_coef = gate_axis_coef
         self.gate_stage_coef = gate_stage_coef
         self.gate_front_bonus = gate_front_bonus
-        self.gate_plane_bonus = gate_plane_bonus
         self.gate_back_bonus = gate_back_bonus
         self.gate_stage_offset = gate_stage_offset
         self.gate_stage_radius = gate_stage_radius
@@ -693,7 +690,6 @@ class Level2RaceReward(VectorRewardWrapper):
             "gate_axis_progress": self.gate_axis_coef * gate_axis_progress,
             "gate_stage_progress": self.gate_stage_coef * gate_stage_progress,
             "gate_front": self.gate_front_bonus * front_hit.astype(jp.float32),
-            "gate_plane": self.gate_plane_bonus * passed_gate.astype(jp.float32),
             "gate_back": self.gate_back_bonus * back_hit.astype(jp.float32),
             "near_gate": self.near_gate_coef * near_gate,
             "gate_bonus": self.gate_bonus * passed_gate.astype(jp.float32),
@@ -1026,6 +1022,7 @@ class RaceObservation(VectorObservationWrapper):
         dtype=jp.float32,
     )
     HISTORY_DIM = 7
+    N_LOCAL_OBSTACLES = 2
 
     def __init__(self, env: VectorEnv, n_history: int = 2, debug_obs: bool = False):
         """Initialize observation vector layout."""
@@ -1036,6 +1033,7 @@ class RaceObservation(VectorObservationWrapper):
         raw_space = env.single_observation_space
         self.n_gates = raw_space["gates_pos"].shape[0]
         self.n_obstacles = raw_space["obstacles_pos"].shape[0]
+        self.n_local_obstacles = min(self.N_LOCAL_OBSTACLES, self.n_obstacles)
         self.action_dim = env.single_action_space.shape[0]
         self.layout = self._build_layout()
         self.obs_dim = self.layout[-1][1].stop
@@ -1084,10 +1082,11 @@ class RaceObservation(VectorObservationWrapper):
         add("vel_body", 3)
         add("ang_vel", 3)
         add("rotmat", 9)
-        add("all_gate_corners_body", 12 * self.n_gates)
-        add("target_gate_onehot", self.n_gates)
-        add("gate_known_flags", self.n_gates)
-        add("obstacles_heading_xy", 4 * self.n_obstacles)
+        add("target_gate_corners_body", 12)
+        add("target_gate_known", 1)
+        add("nearest_other_gate_corners_body", 12)
+        add("nearest_other_gate_known", 1)
+        add("nearest_obstacles_heading_xy", 4 * self.n_local_obstacles)
         add("last_action", self.action_dim)
         add("history", self.n_history * self.HISTORY_DIM)
         return layout
@@ -1102,29 +1101,39 @@ class RaceObservation(VectorObservationWrapper):
         rot = self.quat_to_rotmat(quat)
         rot_t = jp.swapaxes(rot, -1, -2)
         vel_body = jp.einsum("nij,nj->ni", rot_t, vel)
-        all_gate_corners = self._all_gate_corners_body(observations, pos, rot_t)
-        target_gate_onehot = (
-            jp.arange(self.n_gates)[None, :] == observations["target_gate"][:, None]
-        ).astype(jp.float32)
-        gate_known_flags = observations["gates_visited"].astype(jp.float32)
-        obstacles_heading_xy = self._obstacle_heading_xy(observations, pos, rot)
+        active_target_gate = jp.where(
+            observations["target_gate"] < 0,
+            self.n_gates - 1,
+            observations["target_gate"],
+        )
+        target_gate_corners = self._gate_corners_body(observations, active_target_gate, pos, rot_t)
+        target_gate_known = self._gate_known_flag(observations, active_target_gate)
+        nearest_other_gate = self._nearest_other_gate_idx(observations, pos, active_target_gate)
+        nearest_other_gate_corners = self._gate_corners_body(
+            observations, nearest_other_gate, pos, rot_t
+        )
+        nearest_other_gate_known = self._gate_known_flag(observations, nearest_other_gate)
+        nearest_obstacles_heading_xy = self._nearest_obstacles_heading_xy(observations, pos, rot)
         parts = [
             pos[:, 2:3],
             vel_body,
             ang_vel,
             rot.reshape(pos.shape[0], -1),
-            all_gate_corners,
-            target_gate_onehot,
-            gate_known_flags,
-            obstacles_heading_xy,
+            target_gate_corners,
+            target_gate_known,
+            nearest_other_gate_corners,
+            nearest_other_gate_known,
+            nearest_obstacles_heading_xy,
             last_action,
             history.reshape(pos.shape[0], -1),
         ]
         return jp.concatenate(parts, axis=-1)
 
     @staticmethod
-    def _obstacle_heading_xy(observations: dict[str, Array], pos: Array, rot: Array) -> Array:
-        """Return fixed-order [forward, left, XY distance, detected] obstacle features."""
+    def _obstacle_heading_xy_by_obstacle(
+        observations: dict[str, Array], pos: Array, rot: Array
+    ) -> Array:
+        """Return [forward, left, XY distance, detected] per obstacle."""
         relative_xy = observations["obstacles_pos"][..., :2] - pos[:, None, :2]
         heading_forward = rot[:, :2, 0]
         heading_forward /= jp.maximum(jp.linalg.norm(heading_forward, axis=-1, keepdims=True), 1e-6)
@@ -1133,8 +1142,37 @@ class RaceObservation(VectorObservationWrapper):
         relative_left = jp.einsum("nki,ni->nk", relative_xy, heading_left)
         distance_xy = jp.linalg.norm(relative_xy, axis=-1)
         detected = observations["obstacles_visited"].astype(jp.float32)
-        features = jp.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
+        return jp.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
+
+    def _nearest_obstacles_heading_xy(
+        self, observations: dict[str, Array], pos: Array, rot: Array
+    ) -> Array:
+        """Return nearest obstacle features sorted by XY distance."""
+        features = self._obstacle_heading_xy_by_obstacle(observations, pos, rot)
+        nearest_idx = jp.argsort(features[..., 2], axis=-1)[:, : self.n_local_obstacles]
+        nearest = jp.take_along_axis(features, nearest_idx[..., None], axis=1)
+        return nearest.reshape(pos.shape[0], -1)
+
+    @staticmethod
+    def _obstacle_heading_xy(observations: dict[str, Array], pos: Array, rot: Array) -> Array:
+        """Return fixed-order [forward, left, XY distance, detected] obstacle features."""
+        features = RaceObservation._obstacle_heading_xy_by_obstacle(observations, pos, rot)
         return features.reshape(pos.shape[0], -1)
+
+    def _nearest_other_gate_idx(
+        self, observations: dict[str, Array], pos: Array, active_target_gate: Array
+    ) -> Array:
+        """Return the closest non-target gate index in XY."""
+        gate_idx = jp.arange(self.n_gates)[None, :]
+        relative_xy = observations["gates_pos"][..., :2] - pos[:, None, :2]
+        distance_xy = jp.linalg.norm(relative_xy, axis=-1)
+        masked_distance = jp.where(gate_idx != active_target_gate[:, None], distance_xy, jp.inf)
+        return jp.argmin(masked_distance, axis=-1)
+
+    def _gate_known_flag(self, observations: dict[str, Array], gate_idx: Array) -> Array:
+        """Return the selected gate known/visited flag."""
+        batch_idx = jp.arange(gate_idx.shape[0])
+        return observations["gates_visited"][batch_idx, gate_idx][:, None].astype(jp.float32)
 
     def _gate_corners_body(
         self, observations: dict[str, Array], gate_idx: Array, pos: Array, rot_t: Array
@@ -1220,7 +1258,6 @@ REWARD_COMPONENT_KEYS = (
     "gate_axis_progress",
     "gate_stage_progress",
     "gate_front",
-    "gate_plane",
     "gate_back",
     "near_gate",
     "gate_bonus",
@@ -1366,7 +1403,6 @@ def make_envs(
         gate_axis_coef=coefs.get("gate_axis_coef", 8.0),
         gate_stage_coef=coefs.get("gate_stage_coef", 5.0),
         gate_front_bonus=coefs.get("gate_front_bonus", 4.0),
-        gate_plane_bonus=coefs.get("gate_plane_bonus", 8.0),
         gate_back_bonus=coefs.get("gate_back_bonus", 4.0),
         gate_stage_offset=coefs.get("gate_stage_offset", 0.35),
         gate_stage_radius=coefs.get("gate_stage_radius", 0.24),
@@ -1496,7 +1532,6 @@ def train_ppo(
         "gate_axis_coef": args.gate_axis_coef,
         "gate_stage_coef": args.gate_stage_coef,
         "gate_front_bonus": args.gate_front_bonus,
-        "gate_plane_bonus": args.gate_plane_bonus,
         "gate_back_bonus": args.gate_back_bonus,
         "gate_stage_offset": args.gate_stage_offset,
         "gate_stage_radius": args.gate_stage_radius,
@@ -1793,7 +1828,6 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
         "gate_axis_coef": args.gate_axis_coef,
         "gate_stage_coef": args.gate_stage_coef,
         "gate_front_bonus": args.gate_front_bonus,
-        "gate_plane_bonus": args.gate_plane_bonus,
         "gate_back_bonus": args.gate_back_bonus,
         "gate_stage_offset": args.gate_stage_offset,
         "gate_stage_radius": args.gate_stage_radius,
@@ -1868,7 +1902,6 @@ def debug_rollout(args: Args, n_steps: int, device: torch.device, jax_device: st
         "gate_axis_coef": args.gate_axis_coef,
         "gate_stage_coef": args.gate_stage_coef,
         "gate_front_bonus": args.gate_front_bonus,
-        "gate_plane_bonus": args.gate_plane_bonus,
         "gate_back_bonus": args.gate_back_bonus,
         "gate_stage_offset": args.gate_stage_offset,
         "gate_stage_radius": args.gate_stage_radius,
@@ -1941,7 +1974,6 @@ def main(
     gate_axis_coef: float = 8.0,
     gate_stage_coef: float = 5.0,
     gate_front_bonus: float = 4.0,
-    gate_plane_bonus: float = 8.0,
     gate_back_bonus: float = 4.0,
     gate_stage_offset: float = 0.35,
     gate_stage_radius: float = 0.24,
@@ -1987,7 +2019,6 @@ def main(
         gate_axis_coef=gate_axis_coef,
         gate_stage_coef=gate_stage_coef,
         gate_front_bonus=gate_front_bonus,
-        gate_plane_bonus=gate_plane_bonus,
         gate_back_bonus=gate_back_bonus,
         gate_stage_offset=gate_stage_offset,
         gate_stage_radius=gate_stage_radius,

@@ -9,13 +9,16 @@ WORLD_HISTORY_OBSERVATION_LAYOUT = "obstacle_heading_xy_v1"
 LOCAL_HISTORY_WITH_PROGRESS_OBSERVATION_LAYOUT = "level3_obstacle_heading_xy_local_history_v2"
 LOCAL_HISTORY_OBSERVATION_LAYOUT = "level3_obstacle_heading_xy_local_history_no_progress_v3"
 ALL_GATES_OBSERVATION_LAYOUT = "level3_all_gates_onehot_known_local_history_v4"
+LOCAL_OBSTACLE_OBSERVATION_LAYOUT = "level3_target_gate_nearest_gate_2obs_local_history_v5"
 LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES = (
     LOCAL_HISTORY_OBSERVATION_LAYOUT,
     LOCAL_HISTORY_WITH_PROGRESS_OBSERVATION_LAYOUT,
     ALL_GATES_OBSERVATION_LAYOUT,
+    LOCAL_OBSTACLE_OBSERVATION_LAYOUT,
     "obstacle_heading_xy_local_history_v2",
 )
 ALL_GATES_OBSERVATION_LAYOUTS = (ALL_GATES_OBSERVATION_LAYOUT,)
+LOCAL_OBSTACLE_OBSERVATION_LAYOUTS = (LOCAL_OBSTACLE_OBSERVATION_LAYOUT,)
 TARGET_PROGRESS_OBSERVATION_LAYOUTS = (
     LEGACY_OBSERVATION_LAYOUT,
     WORLD_HISTORY_OBSERVATION_LAYOUT,
@@ -53,7 +56,7 @@ def checkpoint_hidden_dim(checkpoint: Any, model_state_dict: dict[str, Any] | No
 def make_checkpoint(
     model_state_dict: dict[str, Any],
     hidden_dim: int | None = None,
-    observation_layout: str = ALL_GATES_OBSERVATION_LAYOUT,
+    observation_layout: str = LOCAL_OBSTACLE_OBSERVATION_LAYOUT,
 ) -> dict[str, Any]:
     """Package level3 model weights with observation-layout and network-width metadata."""
     inferred_hidden_dim = infer_hidden_dim(model_state_dict)

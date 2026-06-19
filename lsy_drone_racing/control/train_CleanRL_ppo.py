@@ -109,7 +109,6 @@ class Args:
     gate_axis_coef: float = 8.0
     gate_stage_coef: float = 5.0
     gate_front_bonus: float = 4.0
-    gate_plane_bonus: float = 8.0
     gate_back_bonus: float = 4.0
     gate_stage_offset: float = 0.35
     gate_stage_radius: float = 0.24
@@ -447,7 +446,6 @@ class Level2RaceReward(VectorRewardWrapper):
         gate_axis_coef: float = 8.0,
         gate_stage_coef: float = 5.0,
         gate_front_bonus: float = 4.0,
-        gate_plane_bonus: float = 8.0,
         gate_back_bonus: float = 4.0,
         gate_stage_offset: float = 0.35,
         gate_stage_radius: float = 0.24,
@@ -477,7 +475,6 @@ class Level2RaceReward(VectorRewardWrapper):
         self.gate_axis_coef = gate_axis_coef
         self.gate_stage_coef = gate_stage_coef
         self.gate_front_bonus = gate_front_bonus
-        self.gate_plane_bonus = gate_plane_bonus
         self.gate_back_bonus = gate_back_bonus
         self.gate_stage_offset = gate_stage_offset
         self.gate_stage_radius = gate_stage_radius
@@ -690,7 +687,6 @@ class Level2RaceReward(VectorRewardWrapper):
             "gate_axis_progress": self.gate_axis_coef * gate_axis_progress,
             "gate_stage_progress": self.gate_stage_coef * gate_stage_progress,
             "gate_front": self.gate_front_bonus * front_hit.astype(jp.float32),
-            "gate_plane": self.gate_plane_bonus * passed_gate.astype(jp.float32),
             "gate_back": self.gate_back_bonus * back_hit.astype(jp.float32),
             "near_gate": self.near_gate_coef * near_gate,
             "gate_bonus": self.gate_bonus * passed_gate.astype(jp.float32),
@@ -1223,7 +1219,6 @@ REWARD_COMPONENT_KEYS = (
     "gate_axis_progress",
     "gate_stage_progress",
     "gate_front",
-    "gate_plane",
     "gate_back",
     "near_gate",
     "gate_bonus",
@@ -1369,7 +1364,6 @@ def make_envs(
         gate_axis_coef=coefs.get("gate_axis_coef", 8.0),
         gate_stage_coef=coefs.get("gate_stage_coef", 5.0),
         gate_front_bonus=coefs.get("gate_front_bonus", 4.0),
-        gate_plane_bonus=coefs.get("gate_plane_bonus", 8.0),
         gate_back_bonus=coefs.get("gate_back_bonus", 4.0),
         gate_stage_offset=coefs.get("gate_stage_offset", 0.35),
         gate_stage_radius=coefs.get("gate_stage_radius", 0.24),
@@ -1499,7 +1493,6 @@ def train_ppo(
         "gate_axis_coef": args.gate_axis_coef,
         "gate_stage_coef": args.gate_stage_coef,
         "gate_front_bonus": args.gate_front_bonus,
-        "gate_plane_bonus": args.gate_plane_bonus,
         "gate_back_bonus": args.gate_back_bonus,
         "gate_stage_offset": args.gate_stage_offset,
         "gate_stage_radius": args.gate_stage_radius,
@@ -1784,7 +1777,6 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
         "gate_axis_coef": args.gate_axis_coef,
         "gate_stage_coef": args.gate_stage_coef,
         "gate_front_bonus": args.gate_front_bonus,
-        "gate_plane_bonus": args.gate_plane_bonus,
         "gate_back_bonus": args.gate_back_bonus,
         "gate_stage_offset": args.gate_stage_offset,
         "gate_stage_radius": args.gate_stage_radius,
@@ -1858,7 +1850,6 @@ def debug_rollout(args: Args, n_steps: int, device: torch.device, jax_device: st
         "gate_axis_coef": args.gate_axis_coef,
         "gate_stage_coef": args.gate_stage_coef,
         "gate_front_bonus": args.gate_front_bonus,
-        "gate_plane_bonus": args.gate_plane_bonus,
         "gate_back_bonus": args.gate_back_bonus,
         "gate_stage_offset": args.gate_stage_offset,
         "gate_stage_radius": args.gate_stage_radius,
@@ -1931,7 +1922,6 @@ def main(
     gate_axis_coef: float = 8.0,
     gate_stage_coef: float = 5.0,
     gate_front_bonus: float = 4.0,
-    gate_plane_bonus: float = 8.0,
     gate_back_bonus: float = 4.0,
     gate_stage_offset: float = 0.35,
     gate_stage_radius: float = 0.24,
@@ -1977,7 +1967,6 @@ def main(
         gate_axis_coef=gate_axis_coef,
         gate_stage_coef=gate_stage_coef,
         gate_front_bonus=gate_front_bonus,
-        gate_plane_bonus=gate_plane_bonus,
         gate_back_bonus=gate_back_bonus,
         gate_stage_offset=gate_stage_offset,
         gate_stage_radius=gate_stage_radius,
