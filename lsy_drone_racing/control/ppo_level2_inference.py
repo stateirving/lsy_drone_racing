@@ -25,15 +25,19 @@ if TYPE_CHECKING:
 
 # No DR baseline: level2 seeds 1-100 success 70%, smooth but lower robustness.
 # MODEL_NAME = "checkpoints/ppo_level2_cmdtilt1p5_160M/ppo_level2_cmdtilt1p5_160M_step_100000000.ckpt"
+# 6.214 6.508 6.560 6.540 7.101
 
 # Basic DR baseline: DR(mass,inertia,dynamics,action), level2 seeds 1-100 success 85%.
 # MODEL_NAME = "checkpoints/ppo_level2_DR_nn256/ppo_level2_DR_nn256_final.ckpt"
+# 6.450 6.418 faild(7.223) 6.328 6.548
 
 # DR + thrust/sag + action latency/response lag + observation latency/noise.
 # Safer balanced backup: level2 seeds 1-100 success 80%, smoother than onemoretime.
 # MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever/level2_DR_latencyobs_middlemanuever_final.ckpt"
+# 6s
 # Current DR benchmark: slightly higher success than middlemanuever, but more aggressive.
-# MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever_onemoretime/level2_DR_latencyobs_middlemanuever_onemoretime_final.ckpt"
+MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever_onemoretime/level2_DR_latencyobs_middlemanuever_onemoretime_final.ckpt"
+# 5.697s 5.684 5.629 5.59 5.604
 
 # Fast-family comparison on the fixed deploy benchmark
 # (level2.toml, seeds 1-100, deterministic inference path):
@@ -48,7 +52,8 @@ if TYPE_CHECKING:
 # crash rate is materially lower and it is much less aggressive than fastfast.
 # MODEL_NAME = "checkpoints/level2_DR_latencyobs_fast/level2_DR_latencyobs_fast_final.ckpt"
 # MODEL_NAME = "checkpoints/level2_DR_latencyobs_fastfast/level2_DR_latencyobs_fastfast_final.ckpt"
-MODEL_NAME = "checkpoints/level2_DR_latencyobs_fast2/level2_DR_latencyobs_fast2_final.ckpt"
+# MODEL_NAME = "checkpoints/level2_DR_latencyobs_fast2/level2_DR_latencyobs_fast2_final.ckpt"
+# 4.847 4.921 (6.205) 5.004 4.925
 
 N_HISTORY = 2
 HISTORY_DIM = 13
