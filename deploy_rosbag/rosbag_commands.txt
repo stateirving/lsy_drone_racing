@@ -1,0 +1,85 @@
+# ROS bag commands for real deploy trajectory logging
+
+# Use these commands with the normal deployment flow from the project docs.
+# Start recording after motion_capture_tracking and the estimator are running,
+# before you start scripts/deploy.py.
+
+# Default drone in the docs and config/level2.toml:
+#   cf52
+
+# Topics recorded:
+#   /drones/cf52/estimate/pose    trajectory: position + quaternion
+#   /drones/cf52/estimate/twist   velocity + angular velocity
+#   /drones/cf52/command          attitude command, useful for debugging
+#   /tf                           Vicon transforms for drone, gates, obstacles
+
+
+# Terminal 1: Motion Tracking
+pixi shell -e deploy
+ros2 launch motion_capture_tracking launch.py
+
+
+# Terminal 2: Estimator
+pixi shell -e deploy
+python -m drone_estimators.ros_nodes.ros2_node --drone_name cf52
+
+
+# Optional Terminal 3: Generate Level 3 real-track config
+# Only needed for Level 3 deployment. Run this after motion tracking is working.
+pixi shell -e deploy
+python scripts/save_track_as_config.py --config <config_name> --save_config_to <config_output_path>
+
+
+# Terminal 3 or 4: Start rosbag recording before deploy
+pixi shell -e deploy
+mkdir -p deploy_rosbag/bags
+
+DRONE=cf52
+CONFIG=<config_name>
+RUN=$(date +%Y%m%d_%H%M%S)
+
+ros2 bag record \
+  -o "deploy_rosbag/bags/real_${RUN}_${CONFIG}_${DRONE}" \
+  -s mcap \
+  --storage-preset-profile zstd_fast \
+  /drones/${DRONE}/estimate/pose \
+  /drones/${DRONE}/estimate/twist \
+  /drones/${DRONE}/command \
+  /tf
+
+# Keep this terminal running during the flight.
+# Stop recording with Ctrl+C after the flight finishes or after you abort deploy.
+
+
+# Final Terminal: Deploy your controller
+pixi shell -e deploy
+python scripts/deploy.py --config <config_name> --controller <controller_name>
+
+
+# Example for current Level 2 PPO default config/controller
+# If config/level2.toml already points to the controller you want, --controller can be omitted.
+python scripts/deploy.py --config level2.toml
+
+
+# Minimal trajectory-only recording
+# Use this if you only want the drone path and want a smaller bag.
+pixi shell -e deploy
+mkdir -p deploy_rosbag/bags
+
+ros2 bag record \
+  -o "deploy_rosbag/bags/real_$(date +%Y%m%d_%H%M%S)_cf52_pose_only" \
+  /drones/cf52/estimate/pose
+
+
+# Check a recorded bag
+ros2 bag info deploy_rosbag/bags/real_YYYYMMDD_HHMMSS_config_cf52
+
+
+# Replay a recorded bag
+ros2 bag play deploy_rosbag/bags/real_YYYYMMDD_HHMMSS_config_cf52
+
+
+# Notes:
+# Do not use --use-sim-time for real deploy recording unless a real /clock topic exists.
+# If topic discovery is unreliable, run this in every ROS terminal before the ROS command:
+#   export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST

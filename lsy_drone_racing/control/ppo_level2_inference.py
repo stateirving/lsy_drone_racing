@@ -33,7 +33,22 @@ if TYPE_CHECKING:
 # Safer balanced backup: level2 seeds 1-100 success 80%, smoother than onemoretime.
 # MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever/level2_DR_latencyobs_middlemanuever_final.ckpt"
 # Current DR benchmark: slightly higher success than middlemanuever, but more aggressive.
-MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever_onemoretime/level2_DR_latencyobs_middlemanuever_onemoretime_final.ckpt"
+# MODEL_NAME = "checkpoints/level2_DR_latencyobs_middlemanuever_onemoretime/level2_DR_latencyobs_middlemanuever_onemoretime_final.ckpt"
+
+# Fast-family comparison on the fixed deploy benchmark
+# (level2.toml, seeds 1-100, deterministic inference path):
+#   fast2_final:   79% success, 21% crash, 4.68s success time, smooth 0.0350,
+#                  mean max tilt 41.9 deg, mean max cmd tilt 65.4 deg.
+#   fast_final:    70% success, 30% crash, 4.57s success time, smooth 0.0345,
+#                  mean max tilt 43.5 deg, mean max cmd tilt 69.8 deg.
+#   fastfast_final: 39% success, 61% crash, 5.03s success time, smooth 0.1653,
+#                   mean max tilt 45.4 deg, mean max cmd tilt 89.2 deg.
+#
+# Current fast deploy candidate: fast2 is slightly slower than fast, but its
+# crash rate is materially lower and it is much less aggressive than fastfast.
+# MODEL_NAME = "checkpoints/level2_DR_latencyobs_fast/level2_DR_latencyobs_fast_final.ckpt"
+# MODEL_NAME = "checkpoints/level2_DR_latencyobs_fastfast/level2_DR_latencyobs_fastfast_final.ckpt"
+MODEL_NAME = "checkpoints/level2_DR_latencyobs_fast2/level2_DR_latencyobs_fast2_final.ckpt"
 
 N_HISTORY = 2
 HISTORY_DIM = 13

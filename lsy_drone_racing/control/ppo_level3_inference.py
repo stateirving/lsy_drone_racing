@@ -1,4 +1,4 @@
-"""Inference controller for the direct level2 CleanRL PPO policy."""
+"""Inference controller for the direct level3 CleanRL PPO policy."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from lsy_drone_racing.control.ppo_level3_observation import (
     LEGACY_OBSERVATION_LAYOUT,
     LOCAL_OBSTACLE_OBSERVATION_LAYOUTS,
     LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES,
+    SPHERICAL_GATE_OBS_COUNT_BY_LAYOUT,
+    SPHERICAL_GATE_OBSTACLE_POLAR_OBSERVATION_LAYOUTS,
     TARGET_PROGRESS_OBSERVATION_LAYOUTS,
     WORLD_HISTORY_OBSERVATION_LAYOUT,
     checkpoint_hidden_dim,
@@ -28,7 +30,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-MODEL_NAME = "checkpoints/level3_localobs_safer_finetune_from_final_highcrashpenalty/level3_localobs_safer_finetune_from_final_highcrashpenalty_final.ckpt"
+MODEL_NAME = "checkpoints/level3_spherical_polar_nearestgate/level3_spherical_polar_nearestgate_final.ckpt"
 
 
 N_HISTORY = 2
@@ -109,6 +111,9 @@ class PPOLevel2Inference(Controller):
         super().__init__(obs, info, config)
         if config.env.control_mode != "attitude":
             raise ValueError("PPOLevel2Inference expects env.control_mode = 'attitude'.")
+        train_cfg = config.get("train", {})
+        observation_cfg = train_cfg.get("observation", {}) if train_cfg is not None else {}
+        self._zero_obstacle_obs = bool(observation_cfg.get("zero_obstacle_obs", False))
 
         drone_params = load_params(config.sim.physics, config.sim.drone_model)
         self.thrust_min = float(drone_params["thrust_min"] * 4)
@@ -145,6 +150,14 @@ class PPOLevel2Inference(Controller):
         self._use_local_obstacles = (
             self.observation_layout in LOCAL_OBSTACLE_OBSERVATION_LAYOUTS
         )
+        self._use_spherical_gate_obstacle_polar = (
+            self.observation_layout in SPHERICAL_GATE_OBSTACLE_POLAR_OBSERVATION_LAYOUTS
+        )
+        self.n_spherical_gates = SPHERICAL_GATE_OBS_COUNT_BY_LAYOUT.get(
+            self.observation_layout, 0
+        )
+        if self._use_spherical_gate_obstacle_polar:
+            self.n_local_obstacles = N_LOCAL_OBSTACLES
         if self._use_all_gates:
             current_obs_dim = (
                 base_obs_dim
@@ -152,6 +165,17 @@ class PPOLevel2Inference(Controller):
                 + self.n_gates
                 + self.n_gates
                 + 4 * self.n_obstacles
+                + self.action_dim
+                + N_HISTORY * self.history_dim
+            )
+        elif self._use_spherical_gate_obstacle_polar:
+            current_obs_dim = (
+                1
+                + 3
+                + 3
+                + 3
+                + 4 * self.n_spherical_gates
+                + 2 * self.n_local_obstacles
                 + self.action_dim
                 + N_HISTORY * self.history_dim
             )
@@ -180,10 +204,13 @@ class PPOLevel2Inference(Controller):
         self._include_prev_gate = (
             not self._use_all_gates
             and not self._use_local_obstacles
+            and not self._use_spherical_gate_obstacle_polar
             and self.obs_dim == current_obs_dim
         )
         supported_obs_dims = (current_obs_dim,) if (
-            self._use_all_gates or self._use_local_obstacles
+            self._use_all_gates
+            or self._use_local_obstacles
+            or self._use_spherical_gate_obstacle_polar
         ) else (
             current_obs_dim,
             current_obs_dim - 12,
@@ -235,6 +262,27 @@ class PPOLevel2Inference(Controller):
         rot_t = rot.T
         vel_body = rot_t @ vel
         active_target_gate = self.n_gates - 1 if target_gate < 0 else target_gate
+        if self._use_spherical_gate_obstacle_polar:
+            gate_spherical = self._gate_spherical_target_next_nearest_observation(
+                obs, active_target_gate, pos, rot_t
+            )
+            flat = np.concatenate(
+                [
+                    pos[2:3],
+                    vel_body,
+                    ang_vel,
+                    rot_t[:, 2],
+                    gate_spherical,
+                    self._nearest_obstacles_polar_xy(obs, pos, rot),
+                    self._last_action_norm,
+                    self._history.reshape(-1),
+                ]
+            ).astype(np.float32)
+            self._history = np.concatenate(
+                [self._history[1:], self._basic_history(obs)[None, :]]
+            )
+            return flat
+
         prev_gate = max(active_target_gate - 1, 0)
         gate_prev = self._gate_corners_body(obs, prev_gate, pos, rot_t)
         if active_target_gate <= 0:
@@ -364,6 +412,92 @@ class PPOLevel2Inference(Controller):
         gates_visited = np.asarray(obs["gates_visited"], dtype=np.float32)
         return np.array([gates_visited[int(gate_idx) % self.n_gates]], dtype=np.float32)
 
+    def _select_gate(
+        self, obs: dict[str, NDArray[np.floating]], gate_idx: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        """Return selected gate position and quaternion."""
+        gate_idx = int(gate_idx) % self.n_gates
+        gate_pos = np.asarray(obs["gates_pos"], dtype=np.float32)[gate_idx]
+        gate_quat = np.asarray(obs["gates_quat"], dtype=np.float32)[gate_idx]
+        return gate_pos, gate_quat
+
+    def _gate_spherical_observation(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        gate_idx: int,
+        reference_pos: NDArray[np.floating],
+        reference_rot_t: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        """Return [r, theta, phi, alpha] for a gate from a reference frame."""
+        gate_pos, gate_quat = self._select_gate(obs, gate_idx)
+        gate_rot = self.quat_to_rotmat(gate_quat)
+        relative_world = gate_pos - np.asarray(reference_pos, dtype=np.float32)
+        relative_ref = np.asarray(reference_rot_t, dtype=np.float32) @ relative_world
+        radius = float(np.linalg.norm(relative_ref))
+        xy_radius = float(np.linalg.norm(relative_ref[:2]))
+        theta = float(np.arctan2(relative_ref[1], relative_ref[0]))
+        phi = float(np.arctan2(relative_ref[2], xy_radius))
+        direction_world = relative_world / max(radius, 1e-6)
+        gate_normal_world = gate_rot[:, 0]
+        normal_alignment = float(np.dot(gate_normal_world, direction_world))
+        alpha = float(np.arccos(np.clip(normal_alignment, -1.0, 1.0)))
+        return np.array([radius, theta, phi, alpha], dtype=np.float32)
+
+    def _gate_spherical_target_next_nearest_observation(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        active_target_gate: int,
+        reference_pos: NDArray[np.floating],
+        reference_rot_t: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        """Return current target, next target, and nearest non-current gate features."""
+        target_gate_spherical = self._gate_spherical_observation(
+            obs, active_target_gate, reference_pos, reference_rot_t
+        )
+        next_gate = min(active_target_gate + 1, self.n_gates - 1)
+        target_gate_pos, target_gate_quat = self._select_gate(obs, active_target_gate)
+        target_gate_rot_t = self.quat_to_rotmat(target_gate_quat).T
+        next_gate_spherical = self._gate_spherical_observation(
+            obs, next_gate, target_gate_pos, target_gate_rot_t
+        )
+        if active_target_gate >= self.n_gates - 1:
+            next_gate_spherical = np.zeros_like(next_gate_spherical)
+        if self.n_spherical_gates == 2:
+            return np.concatenate([target_gate_spherical, next_gate_spherical]).astype(
+                np.float32
+            )
+        nearest_gate_idx = self._nearest_gate_indices_excluding_target(
+            obs, reference_pos, active_target_gate
+        )
+        nearest_gate1_spherical = self._gate_spherical_observation(
+            obs, int(nearest_gate_idx[0]), reference_pos, reference_rot_t
+        )
+        nearest_gate2_spherical = self._gate_spherical_observation(
+            obs, int(nearest_gate_idx[1]), reference_pos, reference_rot_t
+        )
+        return np.concatenate(
+            [
+                target_gate_spherical,
+                next_gate_spherical,
+                nearest_gate1_spherical,
+                nearest_gate2_spherical,
+            ]
+        ).astype(np.float32)
+
+    def _nearest_gate_indices_excluding_target(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        pos: NDArray[np.floating],
+        active_target_gate: int,
+    ) -> NDArray[np.int64]:
+        """Return the two nearest gate indices after masking the current target."""
+        gates_pos = np.asarray(obs["gates_pos"], dtype=np.float32)
+        distance = np.linalg.norm(
+            gates_pos - np.asarray(pos, dtype=np.float32)[None, :], axis=-1
+        )
+        distance[int(active_target_gate) % self.n_gates] = np.inf
+        return np.argsort(distance)[:2]
+
     @staticmethod
     def _obstacle_heading_xy(
         obs: dict[str, NDArray[np.floating]],
@@ -402,6 +536,33 @@ class PPOLevel2Inference(Controller):
         features = np.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
         order = np.argsort(distance_xy)[: self.n_local_obstacles]
         return features[order].reshape(-1).astype(np.float32)
+
+    def _nearest_obstacles_polar_xy(
+        self,
+        obs: dict[str, NDArray[np.floating]],
+        pos: NDArray[np.floating],
+        rot: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        """Return nearest vertical obstacle [XY distance, body-frame azimuth] features."""
+        obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
+        if self._zero_obstacle_obs or obstacles_pos.shape[0] == 0:
+            return np.zeros(2 * self.n_local_obstacles, dtype=np.float32)
+        relative_xy = obstacles_pos[:, :2] - pos[None, :2]
+        heading_forward = np.array(rot[:2, 0], dtype=np.float32, copy=True)
+        heading_forward /= max(float(np.linalg.norm(heading_forward)), 1e-6)
+        heading_left = np.array([-heading_forward[1], heading_forward[0]], dtype=np.float32)
+        relative_forward = relative_xy @ heading_forward
+        relative_left = relative_xy @ heading_left
+        distance_xy = np.linalg.norm(relative_xy, axis=-1)
+        theta = np.arctan2(relative_left, relative_forward)
+        features = np.stack([distance_xy, theta], axis=-1)
+        n_take = min(self.n_local_obstacles, obstacles_pos.shape[0])
+        order = np.argsort(distance_xy)[:n_take]
+        nearest = features[order]
+        if n_take < self.n_local_obstacles:
+            padding = np.zeros((self.n_local_obstacles - n_take, 2), dtype=np.float32)
+            nearest = np.concatenate([nearest, padding], axis=0)
+        return nearest.reshape(-1).astype(np.float32)
 
     def _basic_history(self, obs: dict[str, NDArray[np.floating]]) -> NDArray[np.float32]:
         """Return the short state history expected by the loaded checkpoint layout."""
