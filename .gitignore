@@ -15,6 +15,15 @@ plots/
 c_generated_code/
 /build
 
+# training/evaluation outputs
+artifacts/
+lsy_drone_racing/control/checkpoints/
+**/*.ckpt
+**/*.pt
+**/*.pth
+lsy_drone_racing/control/checkpoints/**/*.pkl
+.ipynb_checkpoints/
+
 # pixi environments
 .pixi/*
 !.pixi/config.toml
