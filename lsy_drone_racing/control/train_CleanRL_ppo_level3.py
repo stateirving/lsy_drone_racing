@@ -126,6 +126,8 @@ class Args:
     obstacle_clearance_coef: float = 0.0
     timeout_penalty: float = 0.0
     time_penalty: float = 0.05
+    speed_limit_mps: float = 0.0
+    speed_excess_coef: float = 0.0
     debug_obs: bool = False
     debug_reward_every: int = 0
     """reward coefficients for training"""
@@ -459,6 +461,8 @@ class Level2RaceReward(VectorRewardWrapper):
         obstacle_clearance_coef: float = 0.0,
         timeout_penalty: float = 0.0,
         time_penalty: float = 0.05,
+        speed_limit_mps: float = 0.0,
+        speed_excess_coef: float = 0.0,
         debug_every: int = 0,
     ):
         """Initialize reward shaping."""
@@ -488,6 +492,8 @@ class Level2RaceReward(VectorRewardWrapper):
         self.obstacle_clearance_coef = obstacle_clearance_coef
         self.timeout_penalty = timeout_penalty
         self.time_penalty = time_penalty
+        self.speed_limit_mps = speed_limit_mps
+        self.speed_excess_coef = speed_excess_coef
         self.debug_every = debug_every
         action_sim_low = np.asarray(getattr(env, "action_sim_low"), dtype=np.float32)
         action_sim_high = np.asarray(getattr(env, "action_sim_high"), dtype=np.float32)
@@ -673,17 +679,22 @@ class Level2RaceReward(VectorRewardWrapper):
         tilt = self._tilt(observations["quat"])
         tilt_angle = self._tilt_angle(observations["quat"])
         tilt_excess = jp.maximum(0.0, tilt_angle - self.tilt_limit_rad) ** 2
+        speed = jp.linalg.norm(observations["vel"], axis=-1)
+        speed_excess = jp.maximum(0.0, speed - self.speed_limit_mps) ** 2
         obstacle_dist = self._closest_obstacle_distance(observations)
         obstacle_penalty = jp.maximum(0.0, self.obstacle_margin - obstacle_dist) ** 2
-        obstacle_clearance_progress = jp.clip(
-            obstacle_dist - self._prev_obstacle_dist, -0.1, 0.1
-        )
-        clearance_active = (
-            jp.minimum(obstacle_dist, self._prev_obstacle_dist) < 1.5 * self.obstacle_margin
-        ) & ~(terminations | truncations)
-        obstacle_clearance_progress = jp.where(
-            clearance_active, obstacle_clearance_progress, 0.0
-        )
+        if observations["obstacles_pos"].shape[-2] == 0:
+            obstacle_clearance_progress = jp.zeros_like(obstacle_dist)
+        else:
+            obstacle_clearance_progress = jp.clip(
+                obstacle_dist - self._prev_obstacle_dist, -0.1, 0.1
+            )
+            clearance_active = (
+                jp.minimum(obstacle_dist, self._prev_obstacle_dist) < 1.5 * self.obstacle_margin
+            ) & ~(terminations | truncations)
+            obstacle_clearance_progress = jp.where(
+                clearance_active, obstacle_clearance_progress, 0.0
+            )
 
         components = {
             "progress": self.progress_coef * progress,
@@ -702,6 +713,7 @@ class Level2RaceReward(VectorRewardWrapper):
             "smooth": -smooth_penalty,
             "tilt": -self.rpy_coef * tilt,
             "tilt_excess": -self.tilt_excess_coef * tilt_excess,
+            "speed_excess": -self.speed_excess_coef * speed_excess,
             "obstacle": -self.obstacle_coef * obstacle_penalty,
             "obstacle_clearance": self.obstacle_clearance_coef * obstacle_clearance_progress,
             "timeout": -self.timeout_penalty * timed_out.astype(jp.float32),
@@ -730,6 +742,8 @@ class Level2RaceReward(VectorRewardWrapper):
             "obstacle_clearance_progress": obstacle_clearance_progress,
             "tilt_angle_deg": jp.rad2deg(tilt_angle),
             "cmd_tilt_deg": jp.rad2deg(cmd_tilt),
+            "speed": speed,
+            "speed_excess": speed_excess,
         }
         return (
             reward,
@@ -798,6 +812,8 @@ class Level2RaceReward(VectorRewardWrapper):
 
     @staticmethod
     def _closest_obstacle_distance(observations: dict[str, Array]) -> Array:
+        if observations["obstacles_pos"].shape[-2] == 0:
+            return jp.full(observations["pos"].shape[:-1], 1e6, dtype=jp.float32)
         dxy = observations["obstacles_pos"][..., :2] - observations["pos"][:, None, :2]
         return jp.min(jp.linalg.norm(dxy, axis=-1), axis=-1)
 
@@ -1033,7 +1049,7 @@ class RaceObservation(VectorObservationWrapper):
         raw_space = env.single_observation_space
         self.n_gates = raw_space["gates_pos"].shape[0]
         self.n_obstacles = raw_space["obstacles_pos"].shape[0]
-        self.n_local_obstacles = min(self.N_LOCAL_OBSTACLES, self.n_obstacles)
+        self.n_local_obstacles = self.N_LOCAL_OBSTACLES
         self.action_dim = env.single_action_space.shape[0]
         self.layout = self._build_layout()
         self.obs_dim = self.layout[-1][1].stop
@@ -1106,7 +1122,9 @@ class RaceObservation(VectorObservationWrapper):
             self.n_gates - 1,
             observations["target_gate"],
         )
-        target_gate_corners = self._gate_corners_body(observations, active_target_gate, pos, rot_t)
+        target_gate_corners = self._gate_corners_body(
+            observations, active_target_gate, pos, rot_t
+        )
         target_gate_known = self._gate_known_flag(observations, active_target_gate)
         nearest_other_gate = self._nearest_other_gate_idx(observations, pos, active_target_gate)
         nearest_other_gate_corners = self._gate_corners_body(
@@ -1148,9 +1166,18 @@ class RaceObservation(VectorObservationWrapper):
         self, observations: dict[str, Array], pos: Array, rot: Array
     ) -> Array:
         """Return nearest obstacle features sorted by XY distance."""
+        if self.n_obstacles == 0:
+            return jp.zeros((pos.shape[0], 4 * self.n_local_obstacles), dtype=jp.float32)
         features = self._obstacle_heading_xy_by_obstacle(observations, pos, rot)
-        nearest_idx = jp.argsort(features[..., 2], axis=-1)[:, : self.n_local_obstacles]
+        n_take = min(self.n_local_obstacles, self.n_obstacles)
+        nearest_idx = jp.argsort(features[..., 2], axis=-1)[:, :n_take]
         nearest = jp.take_along_axis(features, nearest_idx[..., None], axis=1)
+        if n_take < self.n_local_obstacles:
+            padding = jp.zeros(
+                (pos.shape[0], self.n_local_obstacles - n_take, features.shape[-1]),
+                dtype=features.dtype,
+            )
+            nearest = jp.concatenate([nearest, padding], axis=1)
         return nearest.reshape(pos.shape[0], -1)
 
     @staticmethod
@@ -1175,7 +1202,11 @@ class RaceObservation(VectorObservationWrapper):
         return observations["gates_visited"][batch_idx, gate_idx][:, None].astype(jp.float32)
 
     def _gate_corners_body(
-        self, observations: dict[str, Array], gate_idx: Array, pos: Array, rot_t: Array
+        self,
+        observations: dict[str, Array],
+        gate_idx: Array,
+        pos: Array,
+        rot_t: Array,
     ) -> Array:
         gate_idx = jp.mod(gate_idx, self.n_gates)
         batch_idx = jp.arange(pos.shape[0])
@@ -1270,6 +1301,7 @@ REWARD_COMPONENT_KEYS = (
     "smooth",
     "tilt",
     "tilt_excess",
+    "speed_excess",
     "obstacle",
     "obstacle_clearance",
     "timeout",
@@ -1298,6 +1330,8 @@ RACE_METRIC_KEYS = (
     "obstacle_clearance_progress",
     "tilt_angle_deg",
     "cmd_tilt_deg",
+    "speed",
+    "speed_excess",
 )
 
 
@@ -1413,6 +1447,8 @@ def make_envs(
         obstacle_clearance_coef=coefs.get("obstacle_clearance_coef", 0.0),
         timeout_penalty=coefs.get("timeout_penalty", 0.0),
         time_penalty=coefs.get("time_penalty", 0.05),
+        speed_limit_mps=coefs.get("speed_limit_mps", 0.0),
+        speed_excess_coef=coefs.get("speed_excess_coef", 0.0),
         debug_every=debug_reward_every,
     )
     if observation_latency is not None or observation_noise is not None:
@@ -1546,6 +1582,8 @@ def train_ppo(
         "obstacle_clearance_coef": args.obstacle_clearance_coef,
         "timeout_penalty": args.timeout_penalty,
         "time_penalty": args.time_penalty,
+        "speed_limit_mps": args.speed_limit_mps,
+        "speed_excess_coef": args.speed_excess_coef,
     }
     envs = make_envs(
         config=args.config,
@@ -1842,6 +1880,8 @@ def evaluate_ppo(args: Args, n_eval: int, model_path: Path) -> tuple[float, floa
         "obstacle_clearance_coef": args.obstacle_clearance_coef,
         "timeout_penalty": args.timeout_penalty,
         "time_penalty": args.time_penalty,
+        "speed_limit_mps": args.speed_limit_mps,
+        "speed_excess_coef": args.speed_excess_coef,
     }
     eval_env = make_envs(config=args.config, num_envs=1, coefs=r_coefs)
     checkpoint = torch.load(model_path, map_location=device)
@@ -1916,6 +1956,8 @@ def debug_rollout(args: Args, n_steps: int, device: torch.device, jax_device: st
         "obstacle_clearance_coef": args.obstacle_clearance_coef,
         "timeout_penalty": args.timeout_penalty,
         "time_penalty": args.time_penalty,
+        "speed_limit_mps": args.speed_limit_mps,
+        "speed_excess_coef": args.speed_excess_coef,
     }
     envs = make_envs(
         config=args.config,
@@ -1988,6 +2030,8 @@ def main(
     obstacle_clearance_coef: float = 0.0,
     timeout_penalty: float = 0.0,
     time_penalty: float = 0.05,
+    speed_limit_mps: float = 0.0,
+    speed_excess_coef: float = 0.0,
     act_coef: float = 0.005,
     d_act_th_coef: float = 0.02,
     d_act_xy_coef: float = 0.05,
@@ -2033,6 +2077,8 @@ def main(
         obstacle_clearance_coef=obstacle_clearance_coef,
         timeout_penalty=timeout_penalty,
         time_penalty=time_penalty,
+        speed_limit_mps=speed_limit_mps,
+        speed_excess_coef=speed_excess_coef,
         act_coef=act_coef,
         d_act_th_coef=d_act_th_coef,
         d_act_xy_coef=d_act_xy_coef,

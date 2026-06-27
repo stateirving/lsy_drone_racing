@@ -371,7 +371,7 @@ class RaceCoreEnv:
         # 4) Create the environment data and settings
         self.track = track
         gates, obstacles, drones = load_track(track)
-        n_gates, n_obstacles = len(track.gates), len(track.obstacles)
+        n_gates, n_obstacles = len(track.gates), len(track.get("obstacles", []))
         contact_masks = _load_contact_masks(self.sim)
         specs = {} if disturbances is None else disturbances
         disturbances = {mode: rng_spec2fn(spec) for mode, spec in specs.items()}
@@ -651,7 +651,8 @@ class RaceCoreEnv:
         gate_spec = mujoco.MjSpec.from_file(str(self.gate_spec_path))
         obstacle_spec = mujoco.MjSpec.from_file(str(self.obstacle_spec_path))
         frame = self.sim.spec.worldbody.add_frame()
-        n_gates, n_obstacles = len(track.gates), len(track.obstacles)
+        obstacle_specs = track.get("obstacles", [])
+        n_gates, n_obstacles = len(track.gates), len(obstacle_specs)
         for i in range(n_gates):
             gate_body = gate_spec.body("gate")
             if gate_body is None:
@@ -666,7 +667,7 @@ class RaceCoreEnv:
             if obstacle_body is None:
                 raise ValueError("Obstacle body not found in obstacle spec")
             obstacle = frame.attach_body(obstacle_body, "", f":{i}")
-            obstacle.pos = track.obstacles[i]["pos"]
+            obstacle.pos = obstacle_specs[i]["pos"]
             obstacle.mocap = True
         self.sim.build_mjx()
 
@@ -886,7 +887,7 @@ def build_track_randomization_fn(
     if track.randomize:
         random_layout_fn = build_full_track_randomization_fn(
             [gate["pos"][2] for gate in track.gates],
-            [obstacle["pos"][2] for obstacle in track.obstacles],
+            [obstacle["pos"][2] for obstacle in track.get("obstacles", [])],
             track.safety_limits.pos_limit_low,
             track.safety_limits.pos_limit_high,
         )

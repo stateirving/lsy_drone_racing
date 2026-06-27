@@ -140,7 +140,7 @@ def build_random_track_fn(
     masks. Gate z-heights and obstacle z-heights are fixed at the values provided.
 
     Args:
-        n_objects: Number of gates (= number of obstacles).
+        n_objects: Number of gates. If obstacles are present, their count must match the gate count.
         gates_z: Z-height for each gate, shape ``(n_objects,)``.
         obstacles_z: Z-height for each obstacle, shape ``(n_objects,)``.
         pos_limit_low: XY lower bounds of the arena ``[xmin, ymin]``.
@@ -157,12 +157,16 @@ def build_random_track_fn(
 
     Returns:
         ``generate(key) -> (gates_pos, gates_quat, obstacles_pos)`` — a pure JAX function that
-        produces one random track per call. Shapes: ``(N, 3)``, ``(N, 4)`` xyzw, ``(N, 3)``.
+        produces one random track per call. Shapes: ``(N, 3)``, ``(N, 4)`` xyzw, and either
+        ``(N, 3)`` or ``(0, 3)`` for obstacles.
     """
     gates_z = jp.array(gates_z, dtype=jp.float32)
     obstacles_z = jp.array(obstacles_z, dtype=jp.float32)
     N = gates_z.shape[0]
-    assert obstacles_z.shape[0] == N, "Number of gates and obstacles must be the same."
+    n_obstacles = obstacles_z.shape[0]
+    if n_obstacles not in (0, N):
+        raise ValueError("Number of obstacles must be zero or match the number of gates.")
+    has_obstacles = n_obstacles > 0
 
     xmin, ymin = jp.array(pos_limit_low[:2], dtype=jp.float32) + border_margin
     xmax, ymax = jp.array(pos_limit_high[:2], dtype=jp.float32) - border_margin
@@ -208,10 +212,11 @@ def build_random_track_fn(
             ``(gates_pos, gates_quat, obstacles_pos)`` with shapes ``(N, 3)``, ``(N, 4)`` (xyzw),
             ``(N, 3)``.
         """
-        k_start, *sub_keys = jax.random.split(key, 1 + 3 * N)
+        k_start, *sub_keys = jax.random.split(key, 1 + (3 if has_obstacles else 2) * N)
         k_gates = jp.array(sub_keys[:N])
         k_yaws = jp.array(sub_keys[N : 2 * N])
-        k_obs = jp.array(sub_keys[2 * N :])
+        if has_obstacles:
+            k_obs = jp.array(sub_keys[2 * N :])
 
         start_xy = jax.random.uniform(
             k_start,
@@ -228,7 +233,7 @@ def build_random_track_fn(
             ones,  # cumulative gate exclusion (gate-to-obstacle)
             ones,  # cumulative obstacle exclusion
             jp.zeros((N, 3), jp.float32),  # placed gates: [x, y, yaw]
-            jp.zeros((N, 2), jp.float32),  # placed obstacles: [x, y]
+            jp.zeros((n_obstacles, 2), jp.float32),  # placed obstacles: [x, y]
         )
 
         def place_one(
@@ -246,16 +251,20 @@ def build_random_track_fn(
             yaw = (yaw_offset + jp.arctan2(travel_dir[1], travel_dir[0])) % (2 * jp.pi)
             gates = gates.at[i].set(jp.array([gate_xy[0], gate_xy[1], yaw]))
 
-            # Place obstacle inside the travel corridor
-            in_corridor = _corridor(prev_xy, gate_xy, obstacle_corridor_width)
-            obs_weight = in_corridor * gate_excl_obs * obs_excl * start_excl
-            obs_xy = _sample(obs_weight, k_obs[i])
-            obstacles = obstacles.at[i].set(obs_xy)
+            gate_excl_new = gate_excl * _excl_circle(gate_xy, gate_excl_r)
+            if has_obstacles:
+                # Place obstacle inside the travel corridor
+                in_corridor = _corridor(prev_xy, gate_xy, obstacle_corridor_width)
+                obs_weight = in_corridor * gate_excl_obs * obs_excl * start_excl
+                obs_xy = _sample(obs_weight, k_obs[i])
+                obstacles = obstacles.at[i].set(obs_xy)
+                gate_excl_obs_new = gate_excl_obs * _excl_circle(gate_xy, obstacle_excl_r)
+                obs_excl_new = obs_excl * _excl_circle(obs_xy, obstacle_excl_r)
+            else:
+                gate_excl_obs_new = gate_excl_obs
+                obs_excl_new = obs_excl
 
             # Update exclusion zones
-            gate_excl_new = gate_excl * _excl_circle(gate_xy, gate_excl_r)
-            gate_excl_obs_new = gate_excl_obs * _excl_circle(gate_xy, obstacle_excl_r)
-            obs_excl_new = obs_excl * _excl_circle(obs_xy, obstacle_excl_r)
             gate_corr = _corridor(prev_xy, gate_xy, gate_corridor_width)
             gate_w_new = gate_w * gate_excl_new * (1.0 - gate_corr)
 
@@ -278,7 +287,10 @@ def build_random_track_fn(
             [jp.zeros_like(half_yaw), jp.zeros_like(half_yaw), jp.sin(half_yaw), jp.cos(half_yaw)],
             axis=-1,
         )
-        obstacles_pos = jp.concatenate([obstacles, obstacles_z[:, None]], axis=-1)
+        if has_obstacles:
+            obstacles_pos = jp.concatenate([obstacles, obstacles_z[:, None]], axis=-1)
+        else:
+            obstacles_pos = jp.zeros((0, 3), dtype=jp.float32)
 
         return gates_pos, gates_quat, obstacles_pos
 

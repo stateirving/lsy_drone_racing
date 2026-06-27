@@ -16,6 +16,7 @@ from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.ppo_level3_observation import (
     ALL_GATES_OBSERVATION_LAYOUTS,
     LEGACY_OBSERVATION_LAYOUT,
+    LOCAL_OBSTACLE_FRAME_OBSERVATION_LAYOUT,
     LOCAL_OBSTACLE_OBSERVATION_LAYOUTS,
     LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES,
     SPHERICAL_GATE_OBS_COUNT_BY_LAYOUT,
@@ -29,9 +30,14 @@ from lsy_drone_racing.control.ppo_level3_observation import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+# MODEL_NAME = "checkpoints/level3_Curriculum_Xobstacle_speedlimit1.5/level3_Curriculum_Xobstacle_speedlimit1.5_final.ckpt"
 
-MODEL_NAME = "checkpoints/level3_spherical_polar_nearestgate/level3_spherical_polar_nearestgate_final.ckpt"
-
+# Best largepenalty130 checkpoint found so far.
+# level3.toml deterministic seeds 1-100: 43/100 success, mean gates 2.42,
+# 57/100 crash, 0/100 timeout, 12.04 s mean success time.
+# Random cross-check on seeds 1001-1100: 38/100 fast-JAX, 40/100 Torch/vector-env.
+# Treat as a 38-43% success candidate, not a stable obstacle-avoidance policy.
+MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_largepenalty130/level3_Curriculum_Vobstacle_speedlimit1.5_largepenalty130_step_360000000.ckpt"
 
 N_HISTORY = 2
 WORLD_HISTORY_DIM = 13
@@ -42,7 +48,7 @@ HISTORY_DIM_BY_LAYOUT = {
     WORLD_HISTORY_OBSERVATION_LAYOUT: WORLD_HISTORY_DIM,
     **{layout: LOCAL_HISTORY_DIM for layout in LOCAL_HISTORY_OBSERVATION_LAYOUT_ALIASES},
 }
-GATE_CORNERS_LOCAL = np.array(
+GATE_OPENING_CORNERS_LOCAL = np.array(
     [
         [0.0, -0.2, 0.2],
         [0.0, 0.2, 0.2],
@@ -51,6 +57,16 @@ GATE_CORNERS_LOCAL = np.array(
     ],
     dtype=np.float32,
 )
+GATE_FRAME_CORNERS_LOCAL = np.array(
+    [
+        [0.0, -0.36, 0.36],
+        [0.0, 0.36, 0.36],
+        [0.0, 0.36, -0.36],
+        [0.0, -0.36, -0.36],
+    ],
+    dtype=np.float32,
+)
+GATE_CORNERS_LOCAL = GATE_OPENING_CORNERS_LOCAL
 
 
 def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:
@@ -150,13 +166,16 @@ class PPOLevel2Inference(Controller):
         self._use_local_obstacles = (
             self.observation_layout in LOCAL_OBSTACLE_OBSERVATION_LAYOUTS
         )
+        self._use_nearest_other_gate_frame = (
+            self.observation_layout == LOCAL_OBSTACLE_FRAME_OBSERVATION_LAYOUT
+        )
         self._use_spherical_gate_obstacle_polar = (
             self.observation_layout in SPHERICAL_GATE_OBSTACLE_POLAR_OBSERVATION_LAYOUTS
         )
         self.n_spherical_gates = SPHERICAL_GATE_OBS_COUNT_BY_LAYOUT.get(
             self.observation_layout, 0
         )
-        if self._use_spherical_gate_obstacle_polar:
+        if self._use_local_obstacles or self._use_spherical_gate_obstacle_polar:
             self.n_local_obstacles = N_LOCAL_OBSTACLES
         if self._use_all_gates:
             current_obs_dim = (
@@ -323,11 +342,18 @@ class PPOLevel2Inference(Controller):
 
         if self._use_local_obstacles:
             nearest_other_gate = self._nearest_other_gate_idx(obs, pos, active_target_gate)
+            nearest_corners_local = (
+                GATE_FRAME_CORNERS_LOCAL
+                if self._use_nearest_other_gate_frame
+                else GATE_OPENING_CORNERS_LOCAL
+            )
             obs_parts.extend(
                 [
                     gate_current,
                     self._gate_known_flag(obs, active_target_gate),
-                    self._gate_corners_body(obs, nearest_other_gate, pos, rot_t),
+                    self._gate_corners_body(
+                        obs, nearest_other_gate, pos, rot_t, nearest_corners_local
+                    ),
                     self._gate_known_flag(obs, nearest_other_gate),
                     self._nearest_obstacles_heading_xy(obs, pos, rot),
                     self._last_action_norm,
@@ -369,13 +395,18 @@ class PPOLevel2Inference(Controller):
         gate_idx: int,
         pos: NDArray[np.floating],
         rot_t: NDArray[np.floating],
+        corners_local: NDArray[np.floating] | None = None,
     ) -> NDArray[np.float32]:
         """Return the current gate corners relative to the drone body frame."""
+        corners_local = GATE_OPENING_CORNERS_LOCAL if corners_local is None else corners_local
         gate_idx = gate_idx % self.n_gates
         gate_pos = np.asarray(obs["gates_pos"], dtype=np.float32)[gate_idx]
         gate_quat = np.asarray(obs["gates_quat"], dtype=np.float32)[gate_idx]
         gate_rot = self.quat_to_rotmat(gate_quat)
-        corners_world = gate_pos[None, :] + GATE_CORNERS_LOCAL @ gate_rot.T
+        corners_world = (
+            gate_pos[None, :]
+            + np.asarray(corners_local, dtype=np.float32) @ gate_rot.T
+        )
         return ((corners_world - pos[None, :]) @ rot_t.T).reshape(-1).astype(np.float32)
 
     def _all_gate_corners_body(
@@ -525,6 +556,8 @@ class PPOLevel2Inference(Controller):
     ) -> NDArray[np.float32]:
         """Return nearest obstacle [forward, left, XY distance, detected] features."""
         obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=np.float32)
+        if self._zero_obstacle_obs or obstacles_pos.shape[0] == 0:
+            return np.zeros(4 * self.n_local_obstacles, dtype=np.float32)
         relative_xy = obstacles_pos[:, :2] - pos[None, :2]
         heading_forward = np.array(rot[:2, 0], dtype=np.float32, copy=True)
         heading_forward /= max(float(np.linalg.norm(heading_forward)), 1e-6)
@@ -534,8 +567,13 @@ class PPOLevel2Inference(Controller):
         distance_xy = np.linalg.norm(relative_xy, axis=-1)
         detected = np.asarray(obs["obstacles_visited"], dtype=np.float32)
         features = np.stack([relative_forward, relative_left, distance_xy, detected], axis=-1)
-        order = np.argsort(distance_xy)[: self.n_local_obstacles]
-        return features[order].reshape(-1).astype(np.float32)
+        n_take = min(self.n_local_obstacles, obstacles_pos.shape[0])
+        order = np.argsort(distance_xy)[:n_take]
+        nearest = features[order]
+        if n_take < self.n_local_obstacles:
+            padding = np.zeros((self.n_local_obstacles - n_take, 4), dtype=np.float32)
+            nearest = np.concatenate([nearest, padding], axis=0)
+        return nearest.reshape(-1).astype(np.float32)
 
     def _nearest_obstacles_polar_xy(
         self,
