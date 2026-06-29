@@ -30,14 +30,33 @@ from lsy_drone_racing.control.ppo_level3_observation import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+# Historical no-obstacle warm start; keep only as a pre-obstacle reference.
 # MODEL_NAME = "checkpoints/level3_Curriculum_Xobstacle_speedlimit1.5/level3_Curriculum_Xobstacle_speedlimit1.5_final.ckpt"
 
-# Best largepenalty130 checkpoint found so far.
-# level3.toml deterministic seeds 1-100: 43/100 success, mean gates 2.42,
-# 57/100 crash, 0/100 timeout, 12.04 s mean success time.
-# Random cross-check on seeds 1001-1100: 38/100 fast-JAX, 40/100 Torch/vector-env.
-# Treat as a 38-43% success candidate, not a stable obstacle-avoidance policy.
-MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_largepenalty130/level3_Curriculum_Vobstacle_speedlimit1.5_largepenalty130_step_360000000.ckpt"
+# 150110_step_660M: level3.toml seeds 1-100, Torch/vector-env,
+# 51/100 success, mean gates 2.67, success time 10.72 s, 49% crash,
+# 0% timeout, 23% pos-safety violation. Faster backup candidate.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150110/level3_Curriculum_Vobstacle_speedlimit1.5_150110_step_660000000.ckpt"
+
+# 150130_step_550M: level3.toml seeds 1-100, Torch/vector-env,
+# 54/100 success, mean gates 2.71, success time 11.54 s, 46% crash,
+# 0% timeout, 24% pos-safety violation. Older raw-success candidate.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150130/level3_Curriculum_Vobstacle_speedlimit1.5_150130_step_550000000.ckpt"
+
+# 150140_step_680M: level3.toml seeds 1-100, Torch/vector-env,
+# 61/100 success, mean gates 3.04, success time 12.21 s, 39% crash,
+# 0% timeout, 25% pos-safety violation. Previous best before dataxxl.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140/level3_Curriculum_Vobstacle_speedlimit1.5_150140_step_680000000.ckpt"
+
+# 150140_dataxxl_step_1450M: level3.toml seeds 1-100, Torch/vector-env,
+# 57/100 success, mean gates 2.86, success time 10.84 s, 43% crash,
+# 0% timeout, 18% pos-safety violation. Faster safety-boundary backup.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1450000000.ckpt"
+
+# 150140_dataxxl_step_1210M: level3.toml seeds 1-100, Torch/vector-env,
+# 62/100 success, mean gates 3.01, success time 11.28 s, 38% crash,
+# 0% timeout, 27% pos-safety violation. Current best overall candidate.
+MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1210000000.ckpt"
 
 N_HISTORY = 2
 WORLD_HISTORY_DIM = 13
@@ -120,7 +139,7 @@ class PPOAgent(nn.Module):
 
 
 class PPOLevel2Inference(Controller):
-    """Run the trained direct level2 PPO policy as an attitude controller."""
+    """Run the trained direct level3 PPO policy as an attitude controller."""
 
     def __init__(self, obs: dict[str, NDArray[np.floating]], info: dict, config: dict):
         """Initialize policy, action scaling, and observation history."""

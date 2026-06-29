@@ -17,12 +17,26 @@ c_generated_code/
 
 # training/evaluation outputs
 artifacts/
-lsy_drone_racing/control/checkpoints/
+lsy_drone_racing/control/checkpoints/*
 **/*.ckpt
 **/*.pt
 **/*.pth
 lsy_drone_racing/control/checkpoints/**/*.pkl
 .ipynb_checkpoints/
+
+# Level3 inference checkpoint candidates listed in ppo_level3_inference.py.
+!lsy_drone_racing/control/checkpoints/
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Xobstacle_speedlimit1.5/
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Xobstacle_speedlimit1.5/level3_Curriculum_Xobstacle_speedlimit1.5_final.ckpt
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150110/
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150110/level3_Curriculum_Vobstacle_speedlimit1.5_150110_step_660000000.ckpt
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150130/
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150130/level3_Curriculum_Vobstacle_speedlimit1.5_150130_step_550000000.ckpt
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140/
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140/level3_Curriculum_Vobstacle_speedlimit1.5_150140_step_680000000.ckpt
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1450000000.ckpt
+!lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1210000000.ckpt
 
 # pixi environments
 .pixi/*
