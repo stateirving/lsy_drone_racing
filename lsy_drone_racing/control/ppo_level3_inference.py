@@ -58,6 +58,8 @@ if TYPE_CHECKING:
 # 0% timeout, 27% pos-safety violation. Current best overall candidate.
 MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1210000000.ckpt"
 
+# MODEL_NAME = "checkpoints/finetune_level2_dr/finetune_level2_dr_final.ckpt"
+
 N_HISTORY = 2
 WORLD_HISTORY_DIM = 13
 LOCAL_HISTORY_DIM = 7
