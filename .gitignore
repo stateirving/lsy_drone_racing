@@ -38,6 +38,9 @@ lsy_drone_racing/control/checkpoints/**/*.pkl
 !lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1450000000.ckpt
 !lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1210000000.ckpt
 
+# ProperDocs build output
+site/
+
 # pixi environments
 .pixi/*
 !.pixi/config.toml
