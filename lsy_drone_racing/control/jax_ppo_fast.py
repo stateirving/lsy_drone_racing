@@ -9,13 +9,40 @@ vectorized Level2 validation and Level3 training runs.
 
 from __future__ import annotations
 
+import os
+import re
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
+
+def _configure_jax_cache() -> None:
+    """Point XLA GPU autotune cache at a user-writable directory before JAX imports."""
+    cache_dir = Path(os.environ.get("LSY_JAX_CACHE_DIR", f"/tmp/lsy_jax_cache_{os.getuid()}"))
+    autotune_dir = cache_dir / "xla_gpu_per_fusion_autotune_cache_dir"
+    autotune_dir.mkdir(parents=True, exist_ok=True)
+
+    flag = "--xla_gpu_per_fusion_autotune_cache_dir"
+    replacement = f"{flag}={autotune_dir}"
+    xla_flags = os.environ.get("XLA_FLAGS", "")
+    if flag in xla_flags:
+        xla_flags = re.sub(rf"{flag}(?:=|\s+)\S+", replacement, xla_flags)
+    else:
+        xla_flags = f"{xla_flags} {replacement}".strip()
+    os.environ["XLA_FLAGS"] = xla_flags
+
+
+_configure_jax_cache()
+
 import fire
 import gymnasium as gym
 import jax
+
+jax.config.update(
+    "jax_compilation_cache_dir",
+    os.environ.get("LSY_JAX_CACHE_DIR", f"/tmp/lsy_jax_cache_{os.getuid()}"),
+)
+
 import jax.numpy as jnp
 import numpy as np
 from jax import Array

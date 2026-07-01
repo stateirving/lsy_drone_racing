@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 # 150140_dataxxl_step_1290M: current level3.toml seeds 1-50, fast JAX,
 # 38/50 success, mean gates 3.42, success time 11.99 s, 24% crash,
 # 24% pos-safety violation. Active until newtrack finalists get slow-eval checked.
-MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1290000000.ckpt"
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1290000000.ckpt"
 
 # level3_Curriculum_Vobstacle_newtrack, current level3.toml seeds 1-50, fast JAX:
 # 520M: 40/50 success, clean 30/50, mean gates 3.58, success time 11.26 s,
@@ -58,7 +58,16 @@ MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_datax
 # MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_final.ckpt"
 
 
-# MODEL_NAME = "checkpoints/finetune_level2_dr/finetune_level2_dr_final.ckpt"
+# MODEL_NAME = "checkpoints/final_finetune/final_finetune_final.ckpt"
+# 10.5
+
+# MODEL_NAME = "checkpoints/final_finetune180/final_finetune180_final.ckpt"
+
+# MODEL_NAME = "checkpoints/final_finetune180fast/final_finetune180fast_final.ckpt"
+# 8.6
+
+MODEL_NAME = "checkpoints/final_finetune180fastfast/final_finetune180fastfast_final.ckpt"
+# 7.1
 
 N_HISTORY = 2
 WORLD_HISTORY_DIM = 13

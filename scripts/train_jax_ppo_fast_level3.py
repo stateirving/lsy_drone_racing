@@ -2,7 +2,29 @@
 
 from __future__ import annotations
 
+import os
+import re
+from pathlib import Path
 from typing import Any
+
+
+def _configure_jax_cache() -> None:
+    """Point XLA GPU autotune cache at a user-writable directory before JAX imports."""
+    cache_dir = Path(os.environ.get("LSY_JAX_CACHE_DIR", f"/tmp/lsy_jax_cache_{os.getuid()}"))
+    autotune_dir = cache_dir / "xla_gpu_per_fusion_autotune_cache_dir"
+    autotune_dir.mkdir(parents=True, exist_ok=True)
+
+    flag = "--xla_gpu_per_fusion_autotune_cache_dir"
+    replacement = f"{flag}={autotune_dir}"
+    xla_flags = os.environ.get("XLA_FLAGS", "")
+    if flag in xla_flags:
+        xla_flags = re.sub(rf"{flag}(?:=|\s+)\S+", replacement, xla_flags)
+    else:
+        xla_flags = f"{xla_flags} {replacement}".strip()
+    os.environ["XLA_FLAGS"] = xla_flags
+
+
+_configure_jax_cache()
 
 import fire
 

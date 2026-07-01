@@ -43,6 +43,14 @@ lsy_drone_racing/control/checkpoints/**/*.pkl
 !lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_step_700000000.ckpt
 !lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_step_620000000.ckpt
 !lsy_drone_racing/control/checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_final.ckpt
+!lsy_drone_racing/control/checkpoints/final_finetune/
+!lsy_drone_racing/control/checkpoints/final_finetune/final_finetune_final.ckpt
+!lsy_drone_racing/control/checkpoints/final_finetune180/
+!lsy_drone_racing/control/checkpoints/final_finetune180/final_finetune180_final.ckpt
+!lsy_drone_racing/control/checkpoints/final_finetune180fast/
+!lsy_drone_racing/control/checkpoints/final_finetune180fast/final_finetune180fast_final.ckpt
+!lsy_drone_racing/control/checkpoints/final_finetune180fastfast/
+!lsy_drone_racing/control/checkpoints/final_finetune180fastfast/final_finetune180fastfast_final.ckpt
 
 # ProperDocs build output
 site/
