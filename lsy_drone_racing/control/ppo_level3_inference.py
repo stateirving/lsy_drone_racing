@@ -33,30 +33,30 @@ if TYPE_CHECKING:
 # Historical no-obstacle warm start; keep only as a pre-obstacle reference.
 # MODEL_NAME = "checkpoints/level3_Curriculum_Xobstacle_speedlimit1.5/level3_Curriculum_Xobstacle_speedlimit1.5_final.ckpt"
 
-# 150110_step_660M: level3.toml seeds 1-100, Torch/vector-env,
-# 51/100 success, mean gates 2.67, success time 10.72 s, 49% crash,
-# 0% timeout, 23% pos-safety violation. Faster backup candidate.
-# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150110/level3_Curriculum_Vobstacle_speedlimit1.5_150110_step_660000000.ckpt"
-
-# 150130_step_550M: level3.toml seeds 1-100, Torch/vector-env,
-# 54/100 success, mean gates 2.71, success time 11.54 s, 46% crash,
-# 0% timeout, 24% pos-safety violation. Older raw-success candidate.
-# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150130/level3_Curriculum_Vobstacle_speedlimit1.5_150130_step_550000000.ckpt"
-
-# 150140_step_680M: level3.toml seeds 1-100, Torch/vector-env,
-# 61/100 success, mean gates 3.04, success time 12.21 s, 39% crash,
-# 0% timeout, 25% pos-safety violation. Previous best before dataxxl.
-# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140/level3_Curriculum_Vobstacle_speedlimit1.5_150140_step_680000000.ckpt"
-
-# 150140_dataxxl_step_1450M: level3.toml seeds 1-100, Torch/vector-env,
-# 57/100 success, mean gates 2.86, success time 10.84 s, 43% crash,
-# 0% timeout, 18% pos-safety violation. Faster safety-boundary backup.
-# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1450000000.ckpt"
-
 # 150140_dataxxl_step_1210M: level3.toml seeds 1-100, Torch/vector-env,
 # 62/100 success, mean gates 3.01, success time 11.28 s, 38% crash,
-# 0% timeout, 27% pos-safety violation. Current best overall candidate.
-MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1210000000.ckpt"
+# 0% timeout, 27% pos-safety violation. Best slow-eval dataxxl candidate.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1210000000.ckpt"
+
+# 150140_dataxxl_step_1290M: current level3.toml seeds 1-50, fast JAX,
+# 38/50 success, mean gates 3.42, success time 11.99 s, 24% crash,
+# 24% pos-safety violation. Active until newtrack finalists get slow-eval checked.
+MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl/level3_Curriculum_Vobstacle_speedlimit1.5_150140_dataxxl_step_1290000000.ckpt"
+
+# level3_Curriculum_Vobstacle_newtrack, current level3.toml seeds 1-50, fast JAX:
+# 520M: 40/50 success, clean 30/50, mean gates 3.58, success time 11.26 s,
+# 20% crash, 28% pos-safety violation. Best raw-success newtrack candidate.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_step_520000000.ckpt"
+# 700M: 40/50 success, clean 28/50, mean gates 3.54, success time 11.50 s,
+# 20% crash, 34% pos-safety violation. Tied raw-success backup.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_step_700000000.ckpt"
+# 620M: 39/50 success, clean 32/50, mean gates 3.56, success time 11.02 s,
+# 22% crash, 22% pos-safety violation. Stronger clean/safety backup.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_step_620000000.ckpt"
+# final: 39/50 success, clean 28/50, mean gates 3.56, success time 11.10 s,
+# 22% crash, 26% pos-safety violation. Good, but not the best checkpoint.
+# MODEL_NAME = "checkpoints/level3_Curriculum_Vobstacle_newtrack/level3_Curriculum_Vobstacle_newtrack_final.ckpt"
+
 
 # MODEL_NAME = "checkpoints/finetune_level2_dr/finetune_level2_dr_final.ckpt"
 
